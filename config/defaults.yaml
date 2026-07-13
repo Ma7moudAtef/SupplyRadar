@@ -1,0 +1,6 @@
+# App-level defaults. Nothing here is a business value derived from data;
+# these are UI/behavior knobs only.
+at_risk_window_days: 30
+daily_need_window_days: 30
+lane_px: 110
+max_tick_lanes: 20

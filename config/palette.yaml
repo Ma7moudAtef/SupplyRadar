@@ -1,0 +1,16 @@
+# Stage palette for the pipeline chart.
+# 'warehouse' and 'gap' are fixed semantic anchors. Delivery labels found in the
+# data are assigned colors from delivery_cycle in ETA order (nearest arrival first).
+# 'gap' is RESERVED: it is always red, no configuration can override it.
+stages:
+  warehouse: "#27ae60"
+  gap: "#e74c3c"
+delivery_cycle:
+  - "#3498db"
+  - "#f39c12"
+  - "#9b59b6"
+  - "#16a085"
+  - "#2980b9"
+  - "#8e44ad"
+  - "#d35400"
+  - "#7f8c8d"

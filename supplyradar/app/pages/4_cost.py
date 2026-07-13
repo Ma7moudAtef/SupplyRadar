@@ -1,0 +1,58 @@
+"""Cost — value at risk and the cost of the projected consumption."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+import streamlit as st
+
+from supplyradar.app import state
+from supplyradar.viz.cost_chart import build_cost_by_category_chart, build_cost_over_time_chart
+
+st.title("Cost")
+
+bundle = state.require_data()
+if bundle is None:
+    st.stop()
+
+defaults = state.load_defaults()
+within = int(defaults.get("at_risk_window_days", 30))
+risk = state.get_risk(within)
+clean = bundle["clean"]
+
+plan = bundle["projected"].merge(
+    clean.bom[["item_code", "category_level1", "category_level2"]],
+    on="item_code", how="left")
+
+total_cost = plan["cons_$"].sum()
+at_risk_items = set(risk.loc[risk["at_risk"], "item_code"])
+risk_cost = plan.loc[plan["item_code"].isin(at_risk_items), "cons_$"].sum()
+
+st.markdown(
+    f"### Projected consumption costs ${total_cost:,.0f} over the horizon; "
+    f"${risk_cost:,.0f} of it sits on items at risk within {within} days.")
+
+st.plotly_chart(build_cost_over_time_chart(plan), width="stretch",
+                config={"displaylogo": False})
+
+c1, c2 = st.columns(2)
+with c1:
+    st.plotly_chart(build_cost_by_category_chart(plan), width="stretch",
+                    config={"displaylogo": False})
+with c2:
+    st.subheader(f"Spend on at-risk items (within {within} days)")
+    spend = (plan.loc[plan["item_code"].isin(at_risk_items)]
+             .groupby("item_code", as_index=False)["cons_$"].sum()
+             .sort_values("cons_$", ascending=False))
+    if spend.empty:
+        st.write("No spend at risk in this window.")
+    else:
+        st.dataframe(spend, width="stretch", hide_index=True,
+                     column_config={"cons_$": st.column_config.NumberColumn(
+                         format="$%.0f")})
+
+with st.expander("Raw projected consumption"):
+    st.dataframe(plan, width="stretch", hide_index=True)

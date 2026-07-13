@@ -1,0 +1,19 @@
+# Unit-of-measure aliases and mass factors.
+# Aliases map normalized (strip+lower) spellings to a canonical unit.
+# mass_to_kg gives the kg content of one canonical mass unit.
+# 'pc' is a count unit; mass<->pc conversion requires the item's unit_wt_kg.
+aliases:
+  ton: ton
+  tons: ton
+  t: ton
+  mt: ton
+  kg: kg
+  kgs: kg
+  pc: pc
+  pcs: pc
+  piece: pc
+  pieces: pc
+  ea: pc
+mass_to_kg:
+  ton: 1000.0
+  kg: 1.0
