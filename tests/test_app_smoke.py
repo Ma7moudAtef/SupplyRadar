@@ -25,7 +25,7 @@ def test_app_walks_every_page(workbook_path):
     # the one-line answer renders
     assert any("go to gap" in m.value for m in at.markdown)
 
-    for page in ("2_consumption", "3_forecast", "4_cost"):
+    for page in ("2_forecast", "3_cost"):
         at.switch_page(f"pages/{page}.py")
         at.run()
         assert not at.exception, page

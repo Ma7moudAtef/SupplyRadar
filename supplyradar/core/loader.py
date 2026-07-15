@@ -65,6 +65,12 @@ NORMALIZED_COLUMNS: dict[str, list[str]] = {
     "suppliers": ["item_code", "supplier_name"],
 }
 
+# Columns that newer workbooks may carry; absent in older ones, never required.
+OPTIONAL_COLUMNS: dict[str, dict[str, str]] = {
+    # sheet -> {column: kind}, kind in {"numeric", "label"}
+    "consumption": {"cons_rate": "numeric", "cons_rate_uom": "label"},
+}
+
 DATE_COLUMNS: dict[str, list[str]] = {
     "prod": ["date"],
     "consumption": ["date"],
@@ -168,7 +174,15 @@ def load_workbook(source: str | Path | IO[bytes]) -> WorkbookData:
         for col in NUMERIC_COLUMNS.get(name, []):
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
-        for col in NORMALIZED_COLUMNS.get(name, []):
+        label_cols = list(NORMALIZED_COLUMNS.get(name, []))
+        for col, kind in OPTIONAL_COLUMNS.get(name, {}).items():
+            if col not in df.columns:
+                continue
+            if kind == "numeric":
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+            else:
+                label_cols.append(col)
+        for col in label_cols:
             normalized = df[col].map(_normalize_value)
             for norm, orig in zip(normalized, df[col]):
                 if isinstance(norm, str) and norm not in display_names and pd.notna(orig):

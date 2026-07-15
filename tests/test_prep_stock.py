@@ -75,6 +75,26 @@ def test_stage_transitions_on_exact_exhaustion_dates(data):
     assert it1.loc["2026-01-04", "lot_no"] == "lot-9"
 
 
+def test_stage_entry_dates_match_transitions(data):
+    from supplyradar.core.prep_stock import stage_entry_dates
+    data.stock.loc[data.stock["item_code"] == "it-1", "qty"] = 10.0
+    cf = data.consumption_figs
+    cf.loc[cf["item_code"] == "it-1", ["std_cons_rate", "std_cons_rate_uom"]] = \
+        [5.0, "ton/day"]
+    data.delivery = pd.DataFrame({
+        "item_code": ["it-1"], "supplier_name": ["acme"],
+        "shipment_lot_no.": ["lot-9"], "qty_delivered": [12.0],
+        "arrival_date_in_plant": pd.to_datetime(["2026-01-05"]),
+        "delivery_label": ["on ship"],
+    })
+    projected = build_projected_consumption(data, BASE)
+    proj = build_stock_projection(data, projected, BASE)
+    entries = stage_entry_dates(proj).set_index(["item_code", "stock_stage"])
+    assert entries.loc[("it-1", "warehouse"), "days_from_start"] == 0
+    assert entries.loc[("it-1", "on ship"), "days_from_start"] == 2   # Jan 3
+    assert entries.loc[("it-1", "gap"), "days_from_start"] == 4       # Jan 5
+
+
 def test_daily_need_window_shrinks_never_pads_with_zeros(data):
     cf = data.consumption_figs
     cf.loc[cf["item_code"] == "it-1", ["std_cons_rate", "std_cons_rate_uom"]] = \

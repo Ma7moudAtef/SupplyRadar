@@ -1,4 +1,8 @@
-"""Cost — value at risk and the cost of the projected consumption."""
+"""Cost — value at risk and the cost of the projected consumption.
+
+Uses the EFFECTIVE projected consumption: items the planner switched to the
+AMCIP forecast are costed on forecast-driven rows.
+"""
 
 from __future__ import annotations
 
@@ -20,10 +24,12 @@ if bundle is None:
 
 defaults = state.load_defaults()
 within = int(defaults.get("at_risk_window_days", 30))
-risk = state.get_risk(within)
+labels = state.item_labels(bundle)
 clean = bundle["clean"]
 
-plan = bundle["projected"].merge(
+projected, _ = state.effective_tables(bundle)
+risk, _entries = state.risk_tables(bundle)
+plan = projected.merge(
     clean.bom[["item_code", "category_level1", "category_level2"]],
     on="item_code", how="left")
 
@@ -34,6 +40,9 @@ risk_cost = plan.loc[plan["item_code"].isin(at_risk_items), "cons_$"].sum()
 st.markdown(
     f"### Projected consumption costs ${total_cost:,.0f} over the horizon; "
     f"${risk_cost:,.0f} of it sits on items at risk within {within} days.")
+if state.switched_forecasts():
+    st.caption("Includes forecast-driven consumption for: " + ", ".join(
+        sorted(labels.get(i, i) for i in state.switched_forecasts())))
 
 st.plotly_chart(build_cost_over_time_chart(plan), width="stretch",
                 config={"displaylogo": False})
@@ -50,7 +59,10 @@ with c2:
     if spend.empty:
         st.write("No spend at risk in this window.")
     else:
-        st.dataframe(spend, width="stretch", hide_index=True,
+        spend.insert(0, "material", spend["item_code"].map(
+            lambda c: labels.get(c, c)))
+        st.dataframe(spend[["material", "cons_$"]], width="stretch",
+                     hide_index=True,
                      column_config={"cons_$": st.column_config.NumberColumn(
                          format="$%.0f")})
 

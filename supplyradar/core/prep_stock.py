@@ -62,8 +62,10 @@ def build_stock_projection(
     dates = pd.date_range(base_date, horizon_end, freq="D")
     n_days = len(dates)
 
+    # 'plan' rows come from standard rates; 'forecast' rows from the AMCIP
+    # engine when the planner switches an item — both drive the projection
     plan = projected_consumption.loc[
-        projected_consumption["consumption_type"] == "plan"]
+        projected_consumption["consumption_type"].isin(["plan", "forecast"])]
 
     bom = data.bom.set_index("item_code")[["uom", "unit_wt_kg"]]
     stock = data.stock.set_index("item_code")
@@ -163,6 +165,20 @@ def summarize_risk(
     return out.sort_values(
         ["time_to_gap_days", "time_to_below_safety_days", "item_code"]
     ).reset_index(drop=True)
+
+def stage_entry_dates(projection: pd.DataFrame) -> pd.DataFrame:
+    """First date each item starts consuming from each stage.
+
+    One row per (item_code, stock_stage) with `first_date` and
+    `days_from_start` (days after the projection base date). Feeds the
+    per-stage risk windows: 'flag the item if it starts eating from stage X
+    within N days'.
+    """
+    base = projection["date"].min()
+    first = (projection.groupby(["item_code", "stock_stage"], sort=False)
+             ["date"].min().reset_index(name="first_date"))
+    first["days_from_start"] = (first["first_date"] - base).dt.days
+    return first
 
 # ------------------------------------------------------------------ internals
 

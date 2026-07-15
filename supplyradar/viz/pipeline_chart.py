@@ -289,9 +289,11 @@ def build_pipeline_chart(
                   f"{subtitle}</span>"),
             x=0.01, xanchor="left", y=1.0, yanchor="top", pad=dict(t=12),
             font=dict(size=20, color=TITLE_COLOR)),
-        margin=dict(l=150, r=70, t=150, b=60),
+        margin=dict(l=250, r=70, t=150, b=60),
         height=max(430, 170 + n * lane_px),
-        hovermode="x unified",
+        # 'closest' shows ONLY the lane under the cursor (planner feedback:
+        # a unified tooltip for 100+ lanes is unreadable)
+        hovermode="closest",
         hoverlabel=dict(bgcolor="white", bordercolor="#d9d9d9",
                         font=dict(family=FONT_FAMILY, size=12, color="#333")),
         legend=dict(
@@ -472,8 +474,11 @@ def _lane_annotations(item, off, safety_norm, over_norm, safety, over,
     lanes the numeric ticks are dropped (hover carries the values) — the
     pixels belong to the lanes.
     """
+    label = str(display_names.get(item, item))
+    if len(label) > 24:  # descriptions can be long; hover carries the full name
+        label = label[:23] + "…"
     anns = [dict(
-        text=f"<b>{display_names.get(item, item)}</b>", xref="paper", yref="y",
+        text=f"<b>{label}</b>", xref="paper", yref="y",
         x=-0.004, xanchor="right", y=off + LANE_H * 0.5, yanchor="middle",
         showarrow=False, font=dict(size=12, color=ITEM_LABEL_COLOR),
         xshift=-58)]

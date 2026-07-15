@@ -50,15 +50,20 @@ def make_workbook_frames() -> dict[str, pd.DataFrame]:
         "safety_level_days": [2.0, 5.0],
         "replenishment_level_days": [3.0, 5.0],
     })
+    months = pd.date_range("2025-05-01", periods=8, freq="MS")
+    it1_rates = [2.0, 2.2, 1.9, 2.1, 2.0, 2.3, 2.1, 2.0]  # kg/ton
+    it2_rates = [0.4] * 8                                   # pc/heat
     consumption = pd.DataFrame({
-        "date": pd.to_datetime(["2025-12-01", "2025-12-01"]),
-        "item_code": ["it-1", "it-2"],
-        "cons_qty_base_uom": [60.0, 300.0],
-        "cons_qty_ton": [60.0, 6.0],
-        "cons_$": [6000.0, 15000.0],
-        "output_type": ["f", "f"],
-        "production_line": ["1", "1"],
-        "consumption_type": ["actual", "actual"],
+        "date": list(months) * 2,
+        "item_code": ["it-1"] * 8 + ["it-2"] * 8,
+        "cons_qty_base_uom": [r * 30 for r in it1_rates] + [300.0] * 8,
+        "cons_qty_ton": [r * 30 for r in it1_rates] + [6.0] * 8,
+        "cons_$": [6000.0] * 8 + [15000.0] * 8,
+        "output_type": ["f"] * 16,
+        "production_line": ["1"] * 16,
+        "consumption_type": ["actual"] * 16,
+        "cons_rate": it1_rates + it2_rates,
+        "cons_rate_uom": ["kg/ton"] * 8 + ["pc/heat"] * 8,
     })
     delivery = pd.DataFrame({
         "item_code": ["it-1"],

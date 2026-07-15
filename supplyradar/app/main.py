@@ -90,9 +90,8 @@ pages_dir = Path(__file__).parent / "pages"
 nav = st.navigation([
     st.Page(pages_dir / "1_pipeline.py", title="Pipeline Status", icon="📡",
             default=True),
-    st.Page(pages_dir / "2_consumption.py", title="Consumption History", icon="📊"),
-    st.Page(pages_dir / "3_forecast.py", title="Forecast", icon="🔮"),
-    st.Page(pages_dir / "4_cost.py", title="Cost", icon="💰"),
+    st.Page(pages_dir / "2_forecast.py", title="Forecast", icon="🔮"),
+    st.Page(pages_dir / "3_cost.py", title="Cost", icon="💰"),
 ])
 
 report = st.session_state.get("sr_report")

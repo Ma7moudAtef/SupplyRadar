@@ -45,14 +45,24 @@ supplyradar/
     uom.py               # ALL unit conversion lives here (explicit table)
     prep_consumption.py  # production plan -> projected consumption per item
     prep_stock.py        # FIFO waterfall -> daily stock projection + thresholds
+    forecast/            # AMCIP adaptive forecast engine
+      preprocessing.py       # consumption sheet -> monthly rate series
+      behavior.py            # stats + behavior classification (insight only)
+      memory.py              # adaptive lookback candidates
+      models.py              # Naive..SARIMA + Croston model library
+      cross_validation.py    # rolling-origin CV (chronological, never random)
+      selector.py            # error + stability + Occam's-razor selection
+      explanation.py         # why the winner won, why competitors lost
+      engine.py              # orchestration + forecast-driven consumption rows
   viz/           # pure plotly figure factories, zero streamlit imports
     pipeline_chart.py    # the signature stage-encoded inventory area chart
-    consumption_chart.py # actual vs plan
+    forecast_chart.py    # rate history + forecast + confidence band
     cost_chart.py        # projected spend over time / by category
   prep/
     run.py               # CLI wrapper around core
   app/           # thin streamlit shell: calls core + viz, renders, holds state
-    main.py  state.py  components/  pages/
+    main.py  state.py  components/
+    pages/               # 1 Pipeline Status · 2 Forecast · 3 Cost
 config/          # stage palette, uom table, UI defaults — YAML, not code
 tests/           # synthetic fixtures only; the real workbook is never required
 ```
@@ -132,6 +142,48 @@ at risk (30 days)  : 18 items; 12 hit gap within 30 days
 The whole prep runs in ~5 s; the 138-lane pipeline chart builds in under 2 s
 and stays interactive (≈6 traces per item: merged same-stage polygons, one
 outline, one hover layer, plus figure-wide reference lines).
+
+## The Adaptive Forecast Engine (AMCIP)
+
+The Forecast page runs an adaptive competition per material, from the
+`consumption` sheet (`cons_rate`, `cons_rate_uom`, `date`, `item_code`; older
+workbooks without those columns get the rate derived from monthly actual
+production):
+
+1. **Variable**: the normalized monthly consumption rate per
+   (item, output_type, production_line). Demand reconstitutes afterwards as
+   `forecast rate × planned production`.
+2. **Behavior analysis** classifies each series (Stable / Trending / Seasonal /
+   Highly Variable / Random / Intermittent / Structural Change) — insight
+   only, never the model picker.
+3. **Adaptive memory**: candidate lookbacks {2, 3, 6, 12, 24, all} months are
+   pipeline parameters; the effective memory is whatever the winner used.
+4. **Model competition**: Naive, Seasonal Naive, Moving Average, Weighted MA,
+   SES, Holt, ETS (damped), Holt-Winters, ARIMA, SARIMA, Croston for
+   intermittent series. Prophet/XGBoost/LightGBM are spec-optional and not in
+   v1. Heavy MLE models compete on long lookbacks only.
+5. **Rolling-origin CV** (chronological, one-step-ahead) scores every pipeline
+   on MAE / RMSE / MAPE / sMAPE / MASE; selection weighs error, stability and
+   simplicity (ties go to the simplest model).
+6. **Confidence**: 80/95% intervals from validation residuals + a 0-100
+   confidence score; every selection ships with a plain-language explanation
+   and a recommendation (automatic vs manual review).
+7. **Manual override**: pin the model and/or lookback and compare against the
+   automatic pick side by side.
+8. **The switch**: per material, toggle the stock projection from standard
+   plan rates to the forecast — the Pipeline and Cost pages follow instantly
+   and label the forecast-driven materials.
+
+## UI conventions
+
+- Planners see **item descriptions** everywhere; `item_code` stays the
+  internal join key.
+- Pipeline hover shows only the lane under the cursor.
+- Risk windows are adjustable: global gap / below-safety days plus a separate
+  window per supply stage ("flag if consuming from Not Paid within N days"),
+  with an at-risk-only toggle and per-item hide.
+- The former Consumption History page is retired: history lives in Forecast,
+  money lives in Cost.
 
 ## Design notes on the chart
 

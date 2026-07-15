@@ -17,6 +17,10 @@ def test_loads_and_normalizes(workbook_path):
     assert pd.api.types.is_datetime64_any_dtype(data.prod["date"])
     assert data.stock_snapshot_date == pd.Timestamp("2026-01-01")
     assert data.max_plan_date == pd.Timestamp("2026-01-03")
+    # optional cons_rate columns: numeric + normalized when present
+    assert pd.api.types.is_float_dtype(data.consumption["cons_rate"])
+    assert set(data.consumption["cons_rate_uom"].dropna()) <= {
+        "kg/ton", "pc/heat", "ton/day"}
 
 
 def test_missing_sheet_blocks(tmp_path, frames):
