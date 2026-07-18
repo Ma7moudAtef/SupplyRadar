@@ -17,9 +17,12 @@ pip install -r requirements.txt
 make run                        # = streamlit run supplyradar/app/main.py
 ```
 
-In the app: upload `input_data_form.xlsx` (or paste a path), pick the base
-date, done. Those are the only two inputs; everything else is derived from the
-data.
+The app ships with a bundled sample dataset (`data/default_input_public.xlsx`)
+so it renders immediately with no setup — open it and the Pipeline Status
+dashboard is already populated. Upload your own workbook (or paste a path) in
+the sidebar to replace it at any time; the upload always takes priority over
+the default. Base date is the only other input; everything else is derived
+from the data.
 
 Headless prep (parquet + validation report + console summary):
 

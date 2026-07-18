@@ -24,16 +24,23 @@ from supplyradar.core.loader import SchemaError
 
 st.set_page_config(page_title="SupplyRadar", page_icon="📡", layout="wide")
 
+# Bundled sample workbook. Every user sees this dataset until they upload (or
+# point at) their own — the upload always takes priority over the default.
+DEFAULT_WORKBOOK_PATH = (
+    Path(__file__).resolve().parents[2] / "data" / "default_input_public.xlsx")
+
 def _data_sidebar() -> None:
     """Workbook + base_date intake; computes and stores the bundle."""
     st.sidebar.header("Data")
     uploaded = st.sidebar.file_uploader(
         "Universal data form (.xlsx)", type=["xlsx"],
-        help="The 7-sheet input_data_form workbook.")
+        help="The 7-sheet input_data_form workbook. Leave empty to use the "
+             "bundled default dataset.")
     path_text = st.sidebar.text_input(
         "…or a path on this machine", placeholder="/data/input_data_form.xlsx")
 
     file_bytes: bytes | None = None
+    using_default = False
     if uploaded is not None:
         file_bytes = uploaded.getvalue()
     elif path_text.strip():
@@ -42,10 +49,18 @@ def _data_sidebar() -> None:
             file_bytes = p.read_bytes()
         else:
             st.sidebar.error(f"No file at {p}")
+    elif DEFAULT_WORKBOOK_PATH.exists():
+        file_bytes = DEFAULT_WORKBOOK_PATH.read_bytes()
+        using_default = True
 
     if file_bytes is None:
         st.session_state.pop("sr_bundle", None)
         return
+
+    if using_default:
+        st.sidebar.caption(
+            "Showing the bundled **default dataset**. Upload your own "
+            "workbook above to replace it.")
 
     try:
         data, report = state.load_and_validate(file_bytes)

@@ -31,8 +31,44 @@ def test_app_walks_every_page(workbook_path):
         assert not at.exception, page
 
 
-def test_pages_show_empty_state_without_data():
+def test_app_uses_bundled_default_dataset_without_upload():
+    """No upload, no path override: the bundled default workbook loads and
+    the dashboard renders immediately — this is the actual out-of-the-box
+    experience every user gets."""
     at = st_testing.AppTest.from_file(MAIN, default_timeout=60)
     at.run()
     assert not at.exception
-    assert at.info  # designed empty state, not a stack trace
+    assert at.sidebar.success  # "N items projected ..."
+    assert any("default dataset" in c.value for c in at.sidebar.caption)
+    assert at.title[0].value == "Pipeline Status"
+
+
+def test_uploaded_workbook_overrides_the_default(workbook_path):
+    at = st_testing.AppTest.from_file(MAIN, default_timeout=60)
+    at.run()
+    at.sidebar.text_input[0].set_value(str(workbook_path))
+    at.run()
+    assert not at.exception
+    assert at.sidebar.success
+    # the "using the bundled default" banner must disappear once overridden
+    assert not any("default dataset" in c.value for c in at.sidebar.caption)
+
+
+def test_pages_show_empty_state_without_data():
+    """Regression guard for the empty-state code path: if the bundled
+    default were ever missing, the app must show a designed empty state,
+    not a stack trace. AppTest re-executes main.py from scratch each run, so
+    DEFAULT_WORKBOOK_PATH is recomputed from the file on disk — the only way
+    to exercise the "missing" branch is to move the real file aside."""
+    default_path = (Path(__file__).resolve().parents[1] / "supplyradar"
+                    / ".." / "data" / "default_input_public.xlsx").resolve()
+    backup_path = default_path.with_suffix(".xlsx.bak")
+    assert default_path.exists(), "bundled default dataset is missing"
+    default_path.rename(backup_path)
+    try:
+        at = st_testing.AppTest.from_file(MAIN, default_timeout=60)
+        at.run()
+        assert not at.exception
+        assert at.info  # designed empty state, not a stack trace
+    finally:
+        backup_path.rename(default_path)
