@@ -29,15 +29,16 @@ _TABLE_DOCS: dict[str, tuple[str, dict[str, str]]] = {
         {
             "date": "Production date (actuals: first day of the month; plan: "
                     "the exact day).",
-            "production_uom1": "Unit of the first quantity (e.g. 'ms' = "
-                               "molten steel mass).",
-            "production_qty1": "Produced mass in uom1 — the driver for "
-                               "kg/ton consumption rates.",
-            "production_uom2": "Unit of the second quantity (e.g. 'heat' = "
-                               "number of heats/batches).",
-            "production_qty2": "Produced count in uom2 — the driver for "
-                               "pc/heat consumption rates.",
-            "output_type": "The product/output family this row produced.",
+            "production_uom1": "Unit of the first production quantity — a mass "
+                               "unit that drives mass-based consumption rates.",
+            "production_qty1": "Amount produced in uom1 — the driver for "
+                               "mass-per-mass (kg/ton) consumption rates.",
+            "production_uom2": "Unit of the second production quantity — a "
+                               "count / batch unit that drives per-batch "
+                               "consumption rates.",
+            "production_qty2": "Count produced in uom2 — the driver for "
+                               "per-batch (p/s) consumption rates.",
+            "output_type": "The product / output family this row produced.",
             "production_line": "Which production line produced it.",
             "production_type": "'actual' (history) or 'plan' (the future "
                                "schedule).",
@@ -56,9 +57,9 @@ _TABLE_DOCS: dict[str, tuple[str, dict[str, str]]] = {
                             "cost figures.",
             "unit_wt_kg": "Weight of one piece in kg — converts between "
                           "pieces and mass.",
-            "category_level1": "Top category (e.g. Raw Material, Refractory).",
-            "category_level2": "Second-level category.",
-            "category_level3": "Third-level category.",
+            "category_level1": "Top-level material category.",
+            "category_level2": "Second-level material category.",
+            "category_level3": "Third-level material category.",
         }),
     "consumption_figs": (
         "Standard consumption rates and stock policies per material, output "
@@ -67,10 +68,13 @@ _TABLE_DOCS: dict[str, tuple[str, dict[str, str]]] = {
         {
             "item_code": "Material code (joins bom).",
             "std_cons_rate": "Standard consumption rate value.",
-            "std_cons_rate_uom": "Rate unit — kg/ton (per ton produced), "
-                                 "pc/heat (per heat), or ton/day (flat per "
-                                 "calendar day). Abbreviations k/t, p/s, t/d "
-                                 "are accepted.",
+            "std_cons_rate_uom": "Rate unit — one of three branches. Mass "
+                                 "branch (k/t, a.k.a. kg/ton): consumption per "
+                                 "unit mass produced, driven by qty1. "
+                                 "Per-batch branch (p/s): consumption per unit "
+                                 "of the second production quantity, driven by "
+                                 "qty2. Daily branch (t/d, a.k.a. ton/day): a "
+                                 "flat amount per calendar day.",
             "output_type": "Output family the rate applies to.",
             "production_line": "Production line the rate applies to.",
             "daily_need_uom": "Always empty — daily need is DERIVED from the "
@@ -112,9 +116,10 @@ _TABLE_DOCS: dict[str, tuple[str, dict[str, str]]] = {
             "qty_delivered": "Lot quantity, in the material's unit.",
             "arrival_date_in_plant": "Expected arrival date; past-due dates "
                                      "are treated as available immediately.",
-            "delivery_label": "The lot's pipeline stage (e.g. paid / under "
-                              "clearance / not paid) — becomes the fill "
-                              "color of that supply bucket.",
+            "delivery_label": "The lot's pipeline stage — your own label for "
+                              "where the lot sits in the supply pipeline; it "
+                              "becomes the fill color of that supply bucket "
+                              "on the chart.",
         }),
     "stock": (
         "The opening warehouse snapshot: one row per material with the "
@@ -140,15 +145,40 @@ _TABLE_DOCS: dict[str, tuple[str, dict[str, str]]] = {
         }),
 }
 
+def _display_spelling(df, display_names: dict[str, str]):
+    """Render normalized label cells back in the file's own spelling.
+
+    The loader lower-cases/aliases labels (e.g. 'k/t' -> 'kg/ton', 'Ton' ->
+    'ton') for its internal joins; `display_names` remembers the original
+    spelling for each. Mapping the sample's text cells back through it makes
+    the downloaded CSV an exact echo of the user's workbook — same unit
+    spellings (k/t, p/s, t/d, t/p/k) and casing — not the engine's canon.
+    """
+    if not display_names:
+        return df
+    out = df.copy()
+    # The per-cell isinstance guard passes numeric/date cells through
+    # untouched, so this is safe to run on every column regardless of dtype
+    # (label columns land as 'str'/'object', not just 'object').
+    for col in out.columns:
+        out[col] = out[col].map(
+            lambda v: display_names.get(v, v) if isinstance(v, str) else v)
+    return out
+
 def build_sample_csv(data: WorkbookData) -> str:
-    """One CSV: per table a '# table:' marker, header, and first 10 rows."""
+    """One CSV: per table a '# table:' marker, header, and first 10 rows.
+
+    Label cells echo the workbook's own spelling (via the display-name map),
+    so the sample matches the source file rather than the normalized form.
+    """
     out = io.StringIO()
     out.write("# SupplyRadar sample data — first "
               f"{SAMPLE_ROWS} rows of each table\n")
     for sheet in SHEET_SCHEMAS:
         df = data.sheet(sheet)
         out.write(f"\n# ===== table: {sheet} ({len(df)} rows total) =====\n")
-        df.head(SAMPLE_ROWS).to_csv(out, index=False)
+        _display_spelling(df.head(SAMPLE_ROWS), data.display_names).to_csv(
+            out, index=False)
     return out.getvalue()
 
 def build_data_dictionary(data: WorkbookData) -> str:

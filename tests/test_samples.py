@@ -33,3 +33,32 @@ def test_data_dictionary_documents_every_column(data):
         assert f"TABLE: {sheet}" in txt
         for col in cols:
             assert col in txt, f"{sheet}.{col} missing from the dictionary"
+
+
+def test_data_dictionary_is_business_neutral(data):
+    """The shipped dictionary must describe the universal format generically —
+    no jargon from the industry the sample data was anonymized from."""
+    txt = build_data_dictionary(data).lower()
+    for term in ("molten steel", "refractory", "under clearance",
+                 "not paid", "heat"):
+        assert term not in txt, f"business-specific term leaked: {term!r}"
+
+
+def test_sample_csv_echoes_the_files_own_unit_spelling(tmp_path, frames):
+    """The CSV shows the workbook's spellings (k/t, Ton), not the engine's
+    normalized canon (kg/ton, ton) — so it matches the file the user has."""
+    import pandas as pd
+
+    from supplyradar.core.loader import load_workbook
+
+    frames["consumption_figs"]["std_cons_rate_uom"] = ["k/t", "p/s"]
+    frames["bom"]["uom"] = ["Ton", "PC"]
+    path = tmp_path / "spelled.xlsx"
+    with pd.ExcelWriter(path) as writer:
+        for name, df in frames.items():
+            df.to_excel(writer, sheet_name=name, index=False)
+    csv = build_sample_csv(load_workbook(path))
+    figs = csv.split("# ===== table: consumption_figs", 1)[1].split("# =====")[0]
+    assert "k/t" in figs and "kg/ton" not in figs
+    bom = csv.split("# ===== table: bom", 1)[1].split("# =====")[0]
+    assert "Ton" in bom
