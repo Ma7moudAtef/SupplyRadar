@@ -73,6 +73,13 @@ dataclass (one DataFrame per sheet + a display-name map + source metadata).
   comparison against the long-form workbook. Unknown spellings still hit
   validation's blocking rule. Plain single-letter uoms (`t`/`p`/`k`) are
   aliases in `core/uom.py`.
+- **Units always display as the FILE spells them** — when a unit is mapped to
+  its canonical form (rate aliases above, or `PLAIN_UOM_COLUMNS` via
+  `uom.normalize_uom`), the canonical value gets a `display_names` entry
+  pointing at the file's own spelling (first spelling seen wins). So a
+  workbook writing `k/t` shows `k/t` everywhere in the UI while the engines
+  compute on `kg/ton`; a workbook writing `Ton` keeps showing `Ton`. No unit
+  string is hardcoded in the display layer.
 - `WorkbookData.stock_snapshot_date` / `.max_plan_date` — the two dates that
   bound the allowed `base_date`.
 
@@ -133,7 +140,7 @@ rate × planned production.
 | `cross_validation.py` | Rolling-origin one-step-ahead validation — chronological, never a random split — scoring MAE/RMSE/MAPE/sMAPE/MASE per (model, window) pipeline. |
 | `selector.py` | Ranks pipelines on error + stability; within a 5% tie the SIMPLEST model wins (Occam). `confidence_score` maps sMAPE to 0-100. |
 | `explanation.py` | Plain-language "why this model won / why the runners-up lost" + the recommendation (automatic vs manual review). |
-| `engine.py` | Orchestration. `run_item_forecast(by_output=…, by_line=…)` implements the **tree of choices**: an empty axis is combined into ONE aggregated forecast (total consumption ÷ total production — a production-weighted rate), chosen values are broken out. Each `ComboForecast` carries the sub-combos it `covers`; `forecast_projected_consumption` applies a group's rate to every covered stream's planned production. Also: `expected_monthly_consumption`, `build_comparison_table` (history + top-3 winners for the editable table), `run_all_items` (fleet competition, optionally over a subset). |
+| `engine.py` | Orchestration. `run_item_forecast(by_output=…, by_line=…)` implements the **tree of choices**: an empty axis is combined into ONE aggregated forecast (total consumption ÷ total production — a production-weighted rate), chosen values are broken out. Each `ComboForecast` carries the sub-combos it `covers`; `forecast_projected_consumption` applies a group's rate to every covered stream's planned production. Also: `expected_monthly_consumption`, `build_comparison_table` (history + top-3 winners for the editable table), `run_all_items` (fleet competition, optionally over a subset). **No model result without its prediction**: `_attach_predictions` adds each ranked pipeline's actual point forecast (`next_rate` = first forecast month, `avg_rate` = monthly average over the horizon) to the competition table, and `run_all_items` rows carry the winner's `next_rate`/`avg_rate`/`rate_uom` alongside its scores. |
 
 ### `core/timing.py`
 Env-gated timing harness (`SUPPLYRADAR_TIMING=1`): `with stage("name"):`
@@ -242,10 +249,14 @@ chart → "how to read" → at-risk table (with which rule fired) → raw data.
 ### `app/pages/2_forecast.py` — Forecast (AMCIP dashboard)
 "Run forecast" Apply panel (material, horizon, and the two break-out
 selectors implementing the tree of choices) → per-group tabs: intelligence
-card, recommendation, manual-override Apply panel, rate chart, the
+card (statistical features **plus the selected model's forecast values**),
+recommendation, manual-override Apply panel, rate chart, the
 history + top-3 + "Your projection" editable table, explanation, competition
-table → the projection switch → fleet competition behind an explicit
-"Run competition" action button (materials and/or whole categories).
+table (every model row shows its `next month` / `avg/month` prediction) →
+the projection switch → fleet competition behind an explicit
+"Run competition" action button (materials and/or whole categories; each
+winner listed with its prediction and unit). All rate units render via
+`_disp` — the data file's own spelling, never a hardcoded string.
 
 ### `app/pages/3_cost.py` — Cost
 Total projected spend + share on at-risk items, spend over time by category,
@@ -272,11 +283,11 @@ Headless CLI: `python -m supplyradar.prep.run --workbook … --base-date …
 |---|---|
 | `conftest.py` | The synthetic 2-item workbook fixture (in-memory + written xlsx with messy casing). |
 | `test_uom.py` | Conversion table + the three rate-branch computations, hand-checked. |
-| `test_loader.py` | Normalization, display map, optional columns, schema errors block. |
+| `test_loader.py` | Normalization, display map (incl. canonical units displaying as the file's own spelling), optional columns, schema errors block. |
 | `test_validation.py` | Drop-and-count of orphan combos, flag-not-drop of netting rows, blocking rules. |
 | `test_prep_consumption.py` | Golden hand-computed projection, ton/day calendar branch, missing-combo raises, base-date window. |
 | `test_prep_stock.py` | qty-identity property test, exact stage-transition dates, shrinking daily-need window, risk ordering, stage entry dates. |
-| `test_forecast_engine.py` | Rate-series construction (netting, uom backfill, derivation), model library (incl. production-weighted WMA), chronological no-leakage CV, Occam tie-break, trending e2e, override pinning, the grouping tree of choices, aggregated switch coverage, comparison table. |
+| `test_forecast_engine.py` | Rate-series construction (netting, uom backfill, derivation), model library (incl. production-weighted WMA), chronological no-leakage CV, Occam tie-break, trending e2e, override pinning, the grouping tree of choices, aggregated switch coverage, comparison table, predictions attached to every competition row and fleet-overview row. |
 | `test_pipeline_chart.py` | Trace-count bound, exact stage-boundary dates, gap-always-red, negative rendering, ordering, legend uniqueness. |
 | `test_perf_cache.py` | Figure cache: identical call = no rebuild + same object; fingerprint stability. |
 | `test_app_smoke.py` | Boot on the bundled default, load-form flow, page walk, upload override, designed empty state. |

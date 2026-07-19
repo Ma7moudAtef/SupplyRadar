@@ -428,8 +428,9 @@ def _stage_label(stage: str, display_names: Mapping[str, str]) -> str:
     return label
 
 def _uom_label(uom: str, display_names: Mapping[str, str]) -> str:
-    fallback = {"ton": "Ton", "pc": "PC", "kg": "Kg"}
-    return display_names.get(uom, fallback.get(uom, uom))
+    """Units display exactly as the data file spells them (display map covers
+    both the raw value and its canonical form) — nothing is hardcoded here."""
+    return display_names.get(uom, uom)
 
 def _fmt_date(d) -> str:
     """'Feb 23, 2025' — built without strftime's no-padding directive.

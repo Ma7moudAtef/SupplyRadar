@@ -214,6 +214,11 @@ def run_all_items(data: WorkbookData, horizon_months: int,
                 "production_line": c.production_line,
                 "classification": c.behavior.classification,
                 "model": c.selected_model, "memory": c.effective_memory,
+                # the winner's actual prediction, never just its scores
+                # (full precision here; the UI decides the display format)
+                "next_rate": float(c.forecast["rate"].iloc[0]),
+                "avg_rate": float(c.forecast["rate"].mean()),
+                "rate_uom": c.rate_uom,
                 "smape": round(_selected_metric(c, "smape"), 1),
                 "mae": _selected_metric(c, "mae"),
                 "confidence": round(c.confidence),
@@ -391,6 +396,9 @@ def _forecast_combo(rs: RateSeries, horizon: int, *,
             if res is not None:
                 results.append(res)
     competition = rank_pipelines(results)
+    # every listed pipeline carries its actual prediction (next month + the
+    # horizon's monthly average) — no model result is shown without the value
+    competition = _attach_predictions(competition, values, weights, horizon)
 
     if override_model or override_window:
         competition = _apply_override(competition, override_model,
@@ -442,6 +450,27 @@ def _forecast_combo(rs: RateSeries, horizon: int, *,
         forecastability=float(max(0.0, 0.5 * conf + 50.0 * (1 - cv_pen))),
         flags=list(rs.flags),
         is_override=bool(override_model or override_window))
+
+def _attach_predictions(competition: pd.DataFrame, values: np.ndarray,
+                        weights: np.ndarray | None,
+                        horizon: int) -> pd.DataFrame:
+    """Add each ranked pipeline's point forecast to the competition table:
+    `next_rate` (first forecast month) and `avg_rate` (mean monthly rate over
+    the horizon). One extra fit per pipeline — small next to the CV folds the
+    pipeline already ran, and cached with the rest of the result."""
+    if competition.empty:
+        return competition
+    next_r: list[float] = []
+    avg_r: list[float] = []
+    for _, row in competition.iterrows():
+        point = _point_forecast(values, weights, str(row["model"]),
+                                int(row["window"]), horizon)
+        next_r.append(float(point[0]) if len(point) else float("nan"))
+        avg_r.append(float(np.mean(point)) if len(point) else float("nan"))
+    out = competition.copy()
+    out["next_rate"] = next_r
+    out["avg_rate"] = avg_r
+    return out
 
 def _point_forecast(values: np.ndarray, weights: np.ndarray | None,
                     model: str, window: int, horizon: int) -> np.ndarray:

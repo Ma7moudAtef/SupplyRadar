@@ -21,6 +21,8 @@ from typing import IO
 
 import pandas as pd
 
+from .uom import UOMError, normalize_uom
+
 
 class SchemaError(Exception):
     """A structural problem that makes the workbook unusable (blocks the app)."""
@@ -86,6 +88,15 @@ RATE_UOM_ALIASES: dict[str, str] = {
 RATE_UOM_COLUMNS: dict[str, list[str]] = {
     "consumption_figs": ["std_cons_rate_uom"],
     "consumption": ["cons_rate_uom"],
+}
+
+# Which (sheet, column) pairs hold a plain unit (ton/pc/kg family). Their
+# canonical form (via uom.normalize_uom) gets a display-name entry pointing at
+# the file's own spelling, so derived tables that surface the canonical value
+# still display exactly what the workbook wrote (e.g. 't', never 'Ton').
+PLAIN_UOM_COLUMNS: dict[str, list[str]] = {
+    "bom": ["uom"],
+    "stock": ["uom"],
 }
 
 DATE_COLUMNS: dict[str, list[str]] = {
@@ -207,11 +218,31 @@ def load_workbook(source: str | Path | IO[bytes]) -> WorkbookData:
             df[col] = normalized
         # rate units: map verified alternate spellings (k/t, p/s, t/d, …) to
         # the three canonical branches; unknown spellings pass through so the
-        # validation blocking rule still catches them
+        # validation blocking rule still catches them. The canonical value
+        # inherits the FILE's spelling as its display name (first spelling
+        # seen wins) — the UI shows units exactly as the workbook wrote them.
         for col in RATE_UOM_COLUMNS.get(name, []):
-            if col in df.columns:
-                df[col] = df[col].map(
-                    lambda v: RATE_UOM_ALIASES.get(v, v) if pd.notna(v) else v)
+            if col not in df.columns:
+                continue
+            for orig in df[col].dropna().unique():
+                canon = RATE_UOM_ALIASES.get(orig)
+                if canon and canon not in display_names:
+                    display_names[canon] = display_names.get(orig, str(orig))
+            df[col] = df[col].map(
+                lambda v: RATE_UOM_ALIASES.get(v, v) if pd.notna(v) else v)
+
+        # plain units: the values themselves stay as the file wrote them
+        # (conversion normalizes at use time), but the canonical form gets a
+        # display entry so e.g. a projection carrying 'ton' still displays 't'
+        # when that is the workbook's spelling
+        for col in PLAIN_UOM_COLUMNS.get(name, []):
+            for orig in df[col].dropna().unique():
+                try:
+                    canon = normalize_uom(orig)
+                except UOMError:
+                    continue  # unknown unit -> validation reports it
+                if canon != orig and canon not in display_names:
+                    display_names[canon] = display_names.get(orig, str(orig))
 
         df.index.name = "row_id"
         sheets[name] = df

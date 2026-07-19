@@ -257,6 +257,35 @@ def test_top_forecasts_and_comparison_table(data):
     assert pd.isna(fut_row["Actual rate"]) and pd.notna(fut_row[fc_cols[0]])
 
 
+def test_every_model_row_carries_its_prediction(data):
+    """No model result without its actual forecast value: every ranked
+    pipeline in the competition table carries next_rate and avg_rate, and the
+    selected row's values match the published forecast."""
+    data = _trend_workbook(data)
+    fc = run_item_forecast(data, "it-1", 6)
+    c = fc.combos[0]
+    comp = c.competition
+    assert {"next_rate", "avg_rate"} <= set(comp.columns)
+    assert comp["next_rate"].notna().all()
+    assert comp["avg_rate"].notna().all()
+    sel = comp.loc[comp["selected"]].iloc[0]
+    assert sel["next_rate"] == pytest.approx(c.forecast["rate"].iloc[0])
+    assert sel["avg_rate"] == pytest.approx(c.forecast["rate"].mean())
+
+
+def test_multi_item_overview_carries_predictions(data):
+    """The fleet competition (multiple materials) also ships each winner's
+    prediction and its rate unit, not just error scores."""
+    from supplyradar.core.forecast.engine import run_all_items
+
+    overview = run_all_items(data, 3, items=["it-1", "it-2"])
+    assert not overview.empty
+    assert {"next_rate", "avg_rate", "rate_uom"} <= set(overview.columns)
+    assert overview["next_rate"].notna().all()
+    assert overview["avg_rate"].notna().all()
+    assert set(overview["rate_uom"]) <= {"kg/ton", "pc/heat", "ton/day"}
+
+
 def test_forecast_rows_drive_stock_projection(data):
     data = _trend_workbook(data)
     fc = run_item_forecast(data, "it-1", 3)

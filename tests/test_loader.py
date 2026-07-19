@@ -75,3 +75,17 @@ def test_rate_uom_aliases_map_to_canonical(tmp_path, frames):
     # plain uoms normalize via the uom module at use time
     from supplyradar.core.uom import normalize_uom
     assert [normalize_uom(u) for u in data.stock["uom"]] == ["ton", "pc"]
+    # the canonical values DISPLAY as the file's own spelling — every unit
+    # the UI shows comes from the data file, never from code
+    assert data.display("kg/ton") == "k/t"
+    assert data.display("pc/heat") == "p/s"
+    assert data.display("ton") == "T"
+    assert data.display("pc") == "P"
+
+
+def test_display_names_keep_long_form_spellings(workbook_path):
+    """A workbook that already spells the canonical units keeps its own
+    spelling ('Ton' stays 'Ton') — first spelling seen wins."""
+    data = load_workbook(workbook_path)
+    assert data.display("ton") == "Ton"
+    assert data.display("kg/ton") == "kg/ton"

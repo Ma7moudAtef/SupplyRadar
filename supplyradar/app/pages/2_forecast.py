@@ -159,7 +159,8 @@ tutorial.tip("forecast", "Result tabs",
              "expected consumption, the history + top-3 forecasts table with "
              "a column for YOUR own projection, and the full model "
              "competition with the winner highlighted.")
-combo_tabs = st.tabs([f"{c.label} ({c.rate_uom})" for c in fc.combos])
+# rate units display as the data file spells them (e.g. 'k/t'), via _disp
+combo_tabs = st.tabs([f"{c.label} ({_disp(c.rate_uom)})" for c in fc.combos])
 
 manual_active: dict[str, tuple[str | None, int | None]] = {}
 for tab_i, (tab, combo) in enumerate(zip(combo_tabs, fc.combos)):
@@ -170,13 +171,17 @@ for tab_i, (tab, combo) in enumerate(zip(combo_tabs, fc.combos)):
                      if not combo.competition.empty else float("nan"))
         trend = ("rising" if b.trend_slope > 0 else "falling") \
             if b.trend_pvalue < 0.05 else "flat"
+        rate_lbl = _disp(combo.rate_uom)  # the file's own unit spelling
 
         # ---- compact statistical-features card (fits on one screen) ---------
+        # includes the selected model's ACTUAL prediction, not just its scores
         stats = pd.DataFrame({
             "Feature": ["Behaviour", "Volatility (CV)", "Trend", "Seasonality",
                         "Effective memory", "History",
-                        "Selected model", "Validation sMAPE", "Confidence",
-                        "Data quality", "Forecastability", "Last retraining"],
+                        "Selected model", "Forecast (next month)",
+                        "Forecast (avg/month)", "Validation sMAPE",
+                        "Confidence", "Data quality", "Forecastability",
+                        "Last retraining"],
             "Value": [
                 b.classification,
                 f"{b.cv:.2f}" if b.cv == b.cv else "—",
@@ -185,6 +190,8 @@ for tab_i, (tab, combo) in enumerate(zip(combo_tabs, fc.combos)):
                 combo.effective_memory,
                 f"{b.n_points} months",
                 combo.selected_model,
+                f"{combo.forecast['rate'].iloc[0]:.4f} {rate_lbl}",
+                f"{combo.forecast['rate'].mean():.4f} {rate_lbl}",
                 f"{sel_smape:.1f}%",
                 f"{combo.confidence:.0f}/100",
                 f"{combo.data_quality:.0f}/100",
@@ -198,10 +205,13 @@ for tab_i, (tab, combo) in enumerate(zip(combo_tabs, fc.combos)):
                          "class, volatility, trend, seasonality, how much "
                          "history the winning model used (effective memory), "
                          "and the validation quality scores.")
-        st.markdown("**Material intelligence** — statistical features")
-        cols = st.columns(3)  # three 4-row blocks keep it on one screen
+        st.markdown("**Material intelligence** — statistical features "
+                    "and the forecast result")
+        cols = st.columns(3)  # three even blocks keep it on one screen
+        rows_per = -(-len(stats) // 3)  # ceil division
         for i, col in enumerate(cols):
-            block = stats.iloc[i * 4:(i + 1) * 4].reset_index(drop=True)
+            block = stats.iloc[i * rows_per:(i + 1) * rows_per].reset_index(
+                drop=True)
             col.dataframe(block.style.set_properties(
                 **{"color": "#1a2b4c", "font-size": "12px"}),
                 width="stretch", hide_index=True)
@@ -265,7 +275,7 @@ for tab_i, (tab, combo) in enumerate(zip(combo_tabs, fc.combos)):
         uom_lbl = _disp(expected["uom"].iloc[0]) if not expected.empty else ""
         st.plotly_chart(build_forecast_chart(
             combo.history, combo.forecast,
-            rate_label=f"Rate ({combo.rate_uom})",
+            rate_label=f"Rate ({rate_lbl})",
             expected_consumption=expected,
             consumption_label=f"Expected consumption ({uom_lbl})",
             manual_forecast=manual_fc,
@@ -280,7 +290,7 @@ for tab_i, (tab, combo) in enumerate(zip(combo_tabs, fc.combos)):
                          "models, and an editable 'Your projection' column "
                          "to record your own numbers.")
         st.markdown("**History, top-3 forecasts and your own projection** "
-                    f"(rate, {combo.rate_uom})")
+                    f"(rate, {rate_lbl})")
         table, fc_cols = build_comparison_table(combo)
         table["Your projection"] = float("nan")  # float so NumberColumn types cleanly
         editable_key = f"proj_{item}_{combo.output_type}_{combo.production_line}"
@@ -307,15 +317,24 @@ for tab_i, (tab, combo) in enumerate(zip(combo_tabs, fc.combos)):
         st.markdown("**Why this model**")
         st.text(combo.explanation)
 
-        st.markdown("**Model competition** (winner highlighted)")
+        st.markdown(
+            "**Model competition** (winner highlighted) — every model shows "
+            f"its actual prediction: `next month` and `avg/month` are the "
+            f"forecast rate in {rate_lbl}")
         comp = combo.competition.copy()
         if not comp.empty:
             comp["window"] = comp["window"].map(
                 lambda w: "all" if w >= b.n_points else f"{int(w)}m")
-            view = comp[["model", "window", "n_folds", "mae", "rmse",
-                         "mape", "smape", "mase", "rank", "selected"]]
+            # prediction columns sit right after the pipeline identity — no
+            # model result is listed without its forecast value
+            comp = comp.rename(columns={"next_rate": "next month",
+                                        "avg_rate": "avg/month"})
+            view = comp[["model", "window", "next month", "avg/month",
+                         "n_folds", "mae", "rmse", "mape", "smape", "mase",
+                         "rank", "selected"]]
             styled = highlight_rows(view, comp["selected"]).format(
-                {"mae": "{:.4f}", "rmse": "{:.4f}", "mape": "{:.1f}",
+                {"next month": "{:.4f}", "avg/month": "{:.4f}",
+                 "mae": "{:.4f}", "rmse": "{:.4f}", "mape": "{:.1f}",
                  "smape": "{:.1f}", "mase": "{:.2f}"})
             st.dataframe(styled, width="stretch", hide_index=True)
 
@@ -386,10 +405,18 @@ if run_set:
     if overview.empty:
         st.write("No chosen material has enough history to forecast.")
     else:
+        # each stream's winner ships WITH its prediction (next month + monthly
+        # average over the horizon) in the file's own rate unit
         overview = overview.assign(
             material=overview["item_code"].map(_label),
             output_type=overview["output_type"].map(_disp),
-        )[["material", "output_type", "production_line", "classification",
-           "model", "memory", "smape", "confidence", "recommendation"]]
-        st.dataframe(overview.style.set_properties(**{"color": "#1a2b4c"}),
+            rate_uom=overview["rate_uom"].map(_disp),
+        ).rename(columns={"next_rate": "next month",
+                          "avg_rate": "avg/month",
+                          "rate_uom": "unit"})[
+            ["material", "output_type", "production_line", "classification",
+             "model", "memory", "next month", "avg/month", "unit", "smape",
+             "confidence", "recommendation"]]
+        st.dataframe(overview.style.set_properties(**{"color": "#1a2b4c"})
+                     .format({"next month": "{:.4f}", "avg/month": "{:.4f}"}),
                      width="stretch", hide_index=True)
