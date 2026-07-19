@@ -30,6 +30,7 @@ import streamlit as st
 
 from supplyradar.app import state
 from supplyradar.app.components import apply
+from supplyradar.app.components.samples import build_data_dictionary, build_sample_csv
 from supplyradar.app.components.validation_panel import render_validation_panel
 from supplyradar.core.loader import SchemaError
 
@@ -179,8 +180,33 @@ def _sidebar_status() -> None:
         f"{bundle['base_date'].date()} → "
         f"{pd.Timestamp(bundle['projection']['date'].max()).date()}")
 
-# ---- sidebar: intake form + the global apply-mode switch --------------------
+def _sample_downloads() -> None:
+    """Two downloads explaining the input format of the working dataset:
+    a top-10-rows CSV per table and a full data dictionary. Built from the
+    loaded workbook so the sample always matches what the user works with.
+    (Outside the intake form — download buttons are not allowed in forms.)
+    """
+    bundle = state.get_bundle()
+    if bundle is None:
+        return
+    with st.sidebar.expander("Sample data & format docs"):
+        st.caption("Two files that explain the expected input format: a "
+                   "sample (header + first 10 rows of every table) and a "
+                   "dictionary describing each table and column.")
+        st.download_button(
+            "⬇ sample_data.csv", build_sample_csv(bundle["clean"]),
+            file_name="sample_data.csv", mime="text/csv", key="dl_sample",
+            help="Header + first 10 rows of each of the 7 tables, in one CSV "
+                 "separated by '# table:' markers.")
+        st.download_button(
+            "⬇ data_dictionary.txt", build_data_dictionary(bundle["clean"]),
+            file_name="data_dictionary.txt", mime="text/plain", key="dl_dict",
+            help="Explains every table and every column: what it holds and "
+                 "how the app uses it.")
+
+# ---- sidebar: intake form + samples + the global apply-mode switch ----------
 _data_sidebar()
+_sample_downloads()
 apply.render_mode_toggle()
 
 # ---- navigation: the three modules -----------------------------------------

@@ -9,11 +9,13 @@ aliases:
   mt: ton
   kg: kg
   kgs: kg
+  k: kg
   pc: pc
   pcs: pc
   piece: pc
   pieces: pc
   ea: pc
+  p: pc
 mass_to_kg:
   ton: 1000.0
   kg: 1.0

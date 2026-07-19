@@ -31,12 +31,13 @@ import pandas as pd
 import streamlit as st
 
 from supplyradar.app import state
-from supplyradar.app.components import apply
+from supplyradar.app.components import apply, tutorial
 from supplyradar.app.components.tables import highlight_rows
 from supplyradar.core.forecast.engine import build_comparison_table, expected_monthly_consumption
 from supplyradar.viz.forecast_chart import build_forecast_chart
 
-st.title("Forecast")
+# page title + the Tutorial toggle (tour mode highlights every section below)
+tour = tutorial.begin("forecast", "Forecast")
 
 # ---- data guard -------------------------------------------------------------
 bundle = state.require_data()
@@ -67,6 +68,12 @@ item_options = sorted(clean.stock["item_code"].dropna().unique(), key=_label)
 # ---- forecast choices panel (Run forecast form) -----------------------------
 # All four choices batch together; the (expensive) competition only runs with
 # the APPLIED values, i.e. after 'Run forecast' — or live in auto-apply mode.
+tutorial.tip("forecast", "Forecast choices",
+             "Pick the material and horizon, then choose the granularity as "
+             "a tree of choices: leave an axis empty to COMBINE it into one "
+             "aggregated forecast, or break out specific output types / "
+             "lines to forecast each separately (1–4 results). Click Run "
+             "forecast to compute.")
 with apply.panel("forecast_choices"):
     top1, top2 = st.columns([3, 1])
     top1.selectbox(
@@ -125,6 +132,11 @@ if not fc.combos:
     st.stop()
 
 # ---- header + the projection switch (an action toggle, always immediate) ----
+tutorial.tip("forecast", "Projection switch",
+             "The toggle on the right makes THIS forecast drive the "
+             "material's stock projection on the Pipeline and Cost pages, "
+             "replacing the standard plan rates for every stream the "
+             "forecast covers. Flip it off to go back to plan.")
 sw1, sw2 = st.columns([3, 1])
 shown_smape = [c.competition.loc[c.competition["selected"], "smape"].iloc[0]
                for c in fc.combos if not c.competition.empty]
@@ -140,10 +152,17 @@ use_forecast = sw2.toggle(
          "not forecast keep their standard plan rate.")
 
 # ---- one tab per forecast group ---------------------------------------------
+tutorial.tip("forecast", "Result tabs",
+             "One tab per forecast group. Inside each: the material-"
+             "intelligence card (statistical features), the recommendation, "
+             "a manual override, the rate chart with confidence bands and "
+             "expected consumption, the history + top-3 forecasts table with "
+             "a column for YOUR own projection, and the full model "
+             "competition with the winner highlighted.")
 combo_tabs = st.tabs([f"{c.label} ({c.rate_uom})" for c in fc.combos])
 
 manual_active: dict[str, tuple[str | None, int | None]] = {}
-for tab, combo in zip(combo_tabs, fc.combos):
+for tab_i, (tab, combo) in enumerate(zip(combo_tabs, fc.combos)):
     with tab:
         b = combo.behavior
         sel_smape = (combo.competition.loc[combo.competition["selected"],
@@ -173,6 +192,12 @@ for tab, combo in zip(combo_tabs, fc.combos):
                 fc.generated_at.split("T")[0],
             ],
         })
+        if tab_i == 0:
+            tutorial.tip("forecast", "Material intelligence",
+                         "The statistical profile of this stream: behaviour "
+                         "class, volatility, trend, seasonality, how much "
+                         "history the winning model used (effective memory), "
+                         "and the validation quality scores.")
         st.markdown("**Material intelligence** — statistical features")
         cols = st.columns(3)  # three 4-row blocks keep it on one screen
         for i, col in enumerate(cols):
@@ -248,6 +273,12 @@ for tab, combo in zip(combo_tabs, fc.combos):
             width="stretch", config={"displaylogo": False})
 
         # ---- comparison table: history + top-3 + your projection -------------
+        if tab_i == 0:
+            tutorial.tip("forecast", "Comparison table",
+                         "Month by month: the actual historical rate and "
+                         "consumption, the forecasts of the top-3 winning "
+                         "models, and an editable 'Your projection' column "
+                         "to record your own numbers.")
         st.markdown("**History, top-3 forecasts and your own projection** "
                     f"(rate, {combo.rate_uom})")
         table, fc_cols = build_comparison_table(combo)
@@ -316,6 +347,11 @@ if switched:
 
 # ---- fleet competition (explicit action in both modes) ----------------------
 st.divider()
+tutorial.tip("forecast", "Fleet competition",
+             "Run the model competition for a chosen set of materials (hand-"
+             "picked and/or whole categories) and get a one-row-per-stream "
+             "summary of the winning model, memory, error and "
+             "recommendation. Runs only when you click the button.")
 st.subheader("Run the competition for chosen materials")
 with apply.panel("fleet_scope"):
     st.multiselect(

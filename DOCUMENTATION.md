@@ -45,7 +45,7 @@ shell that wires widgets to cached calls.
 | `supplyradar/app/` | Streamlit shell: pages, state, components |
 | `supplyradar/prep/` | Headless CLI wrapper around core |
 | `config/` | YAML configuration (palette, UOM table, UI defaults) |
-| `data/` | Bundled default workbook shown before any upload |
+| `data/` | Bundled default workbook (anonymized public dataset) shown before any upload |
 | `tests/` | Pytest suite on synthetic fixtures (never the real workbook) |
 | `.streamlit/config.toml` | Pinned light theme with dark text |
 | `requirements.txt` | Pinned direct dependencies (what the suite is tested on) |
@@ -68,6 +68,11 @@ dataclass (one DataFrame per sheet + a display-name map + source metadata).
   on the consumption sheet; older ones without them still load.
 - `load_workbook(source)` — the entry point; parses dates (unparseable
   date = SchemaError), coerces numerics, builds the display map.
+- `RATE_UOM_ALIASES` — verified alternate spellings of the three rate units
+  (`k/t`→kg/ton, `p/s`→pc/heat, `t/d`→ton/day), proven by row-for-row value
+  comparison against the long-form workbook. Unknown spellings still hit
+  validation's blocking rule. Plain single-letter uoms (`t`/`p`/`k`) are
+  aliases in `core/uom.py`.
 - `WorkbookData.stock_snapshot_date` / `.max_plan_date` — the two dates that
   bound the allowed `base_date`.
 
@@ -206,6 +211,20 @@ The Apply-button system (see its module docstring for the full rationale).
 - `render_mode_toggle()` — the sidebar "Auto-apply changes" switch
   (default off = manual Apply).
 
+### `app/components/samples.py`
+Sample-data downloads offered in the sidebar: `build_sample_csv` (one CSV —
+per table a `# table:` marker, the header and the first 10 rows) and
+`build_data_dictionary` (a TXT explaining every table and every column of the
+universal data form, with the current file's row counts). Built from the
+loaded workbook so the sample always matches the working dataset.
+
+### `app/components/tutorial.py`
+Per-module tutorial mode. `tutorial.begin(page, title)` renders the page
+title with a "📘 Tutorial" toggle button; when active, every
+`tutorial.tip(page, title, text)` call renders a numbered amber callout box
+explaining the section that follows it. Pure Streamlit (styled markdown), no
+JS; tips cost nothing when tour mode is off.
+
 ### `app/components/tables.py`
 `highlight_rows` — highlighted table rows keep explicit DARK text so a pale
 highlight can never hide the font.
@@ -261,6 +280,7 @@ Headless CLI: `python -m supplyradar.prep.run --workbook … --base-date …
 | `test_pipeline_chart.py` | Trace-count bound, exact stage-boundary dates, gap-always-red, negative rendering, ordering, legend uniqueness. |
 | `test_perf_cache.py` | Figure cache: identical call = no rebuild + same object; fingerprint stability. |
 | `test_app_smoke.py` | Boot on the bundled default, load-form flow, page walk, upload override, designed empty state. |
+| `test_samples.py` | Sample CSV carries every table capped at 10 rows; the data dictionary documents every column. |
 
 ## 8. Performance model (why the app is not "heavy")
 

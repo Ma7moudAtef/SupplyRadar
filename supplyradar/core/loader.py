@@ -71,6 +71,23 @@ OPTIONAL_COLUMNS: dict[str, dict[str, str]] = {
     "consumption": {"cons_rate": "numeric", "cons_rate_uom": "label"},
 }
 
+# Known spellings of the three consumption-rate units, mapped to canonical.
+# The abbreviated forms were VERIFIED against the long-form workbook (identical
+# rate values row-for-row: k/t<->kg/ton, p/s<->pc/heat, t/d<->ton/day) — this
+# is a spelling table like 'Ton'/'ton', not an invented mapping. Anything not
+# listed here still fails validation's unknown-rate-uom blocking rule.
+RATE_UOM_ALIASES: dict[str, str] = {
+    "kg/ton": "kg/ton", "k/t": "kg/ton", "kg/t": "kg/ton",
+    "pc/heat": "pc/heat", "p/s": "pc/heat", "pc/h": "pc/heat",
+    "ton/day": "ton/day", "t/d": "ton/day", "ton/d": "ton/day",
+}
+
+# Which (sheet, column) pairs hold a rate unit and get the alias mapping.
+RATE_UOM_COLUMNS: dict[str, list[str]] = {
+    "consumption_figs": ["std_cons_rate_uom"],
+    "consumption": ["cons_rate_uom"],
+}
+
 DATE_COLUMNS: dict[str, list[str]] = {
     "prod": ["date"],
     "consumption": ["date"],
@@ -188,6 +205,13 @@ def load_workbook(source: str | Path | IO[bytes]) -> WorkbookData:
                 if isinstance(norm, str) and norm not in display_names and pd.notna(orig):
                     display_names[norm] = str(orig).strip()
             df[col] = normalized
+        # rate units: map verified alternate spellings (k/t, p/s, t/d, …) to
+        # the three canonical branches; unknown spellings pass through so the
+        # validation blocking rule still catches them
+        for col in RATE_UOM_COLUMNS.get(name, []):
+            if col in df.columns:
+                df[col] = df[col].map(
+                    lambda v: RATE_UOM_ALIASES.get(v, v) if pd.notna(v) else v)
 
         df.index.name = "row_id"
         sheets[name] = df

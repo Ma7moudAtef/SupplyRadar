@@ -27,10 +27,11 @@ import numpy as np
 import streamlit as st
 
 from supplyradar.app import state
-from supplyradar.app.components import apply
+from supplyradar.app.components import apply, tutorial
 from supplyradar.app.components.validation_panel import render_validation_panel
 
-st.title("Pipeline Status")
+# page title + the Tutorial toggle (tour mode highlights every section below)
+tour = tutorial.begin("pipeline", "Pipeline Status")
 
 # ---- data guard: everything below needs a computed bundle -------------------
 bundle = state.require_data()
@@ -57,7 +58,12 @@ def _label(code: str) -> str:
 # ---- risk settings panel (Apply form) ---------------------------------------
 # Values live in session_state under their widget keys; with the form they only
 # change when 'Apply risk settings' is clicked.
-with st.expander("Risk settings", expanded=False):
+tutorial.tip("pipeline", "Risk settings",
+             "Set how early a material counts as at risk: the gap window "
+             "(days until stock runs out), the below-safety window, and one "
+             "window per supply stage (e.g. flag anything consuming from a "
+             "'not paid' lot within N days). Click Apply to recompute.")
+with st.expander("Risk settings", expanded=tour):
     with apply.panel("risk_settings"):
         c1, c2 = st.columns(2)
         c1.number_input(
@@ -116,6 +122,9 @@ for row in risk.itertuples(index=False):
         triggers[row.item_code] = fired
 
 # ---- the one-line answer, before any chart ----------------------------------
+tutorial.tip("pipeline", "Headline",
+             "The one-line answer for planners: how many materials hit a "
+             "stock gap or drop below safety within the applied windows.")
 n_gap = int((risk["time_to_gap_days"] <= gap_days).sum())
 n_below = int((risk["time_to_below_safety_days"] <= safety_days).sum())
 headline = (f"### {n_gap} item(s) go to gap within {gap_days} days. "
@@ -132,6 +141,11 @@ if switched:
                + ", ".join(sorted(labels.get(i, i) for i in switched)))
 
 # ---- filter panel (Apply form) ----------------------------------------------
+tutorial.tip("pipeline", "Filters",
+             "Narrow the chart: by category, by supply stage reached, by "
+             "picking or hiding specific materials, at-risk only, and the "
+             "time granularity (day/week/month). Nothing changes until you "
+             "click Apply filters.")
 item_options = sorted(projection["item_code"].unique(), key=_label)
 with apply.panel("pipeline_filters"):
     f1, f2, f3, f4, f5 = st.columns([2, 2, 2, 3, 3])
@@ -199,6 +213,12 @@ ordered = [i for i in risk["item_code"] if i in items]  # time-to-gap ascending
 filtered = projection.loc[projection["item_code"].isin(items)]
 
 # ---- the chart, from the zero-copy figure cache -----------------------------
+tutorial.tip("pipeline", "Pipeline chart",
+             "One lane per material, most urgent on top. The area height is "
+             "the projected stock; the fill color is the supply bucket "
+             "feeding the plant (green warehouse, then each incoming lot, "
+             "red gap = nothing left). Dashed lines are the safety (green) "
+             "and overstock (red) levels; hover any lane for the details.")
 if not ordered:
     st.info("No items match the current filters — clear a filter to see lanes.")
 else:
@@ -234,6 +254,10 @@ with st.expander("How to read this chart"):
 """)
 
 # ---- at-risk table under the applied windows --------------------------------
+tutorial.tip("pipeline", "At-risk table",
+             "Every material flagged by your windows, with its opening "
+             "stock, first gap date and exactly which rule fired "
+             "('triggered_by').")
 st.subheader("At risk under the current windows")
 at_risk_tbl = risk.loc[risk["item_code"].isin(triggers)].copy()
 if at_risk_tbl.empty:
@@ -256,5 +280,8 @@ else:
                  })
 
 # raw numbers for anyone who wants to audit the lanes
+tutorial.tip("pipeline", "Raw data",
+             "The daily projection table behind the chart, for auditing or "
+             "export.")
 with st.expander("Raw projection data"):
     st.dataframe(filtered, width="stretch", hide_index=True)

@@ -23,8 +23,9 @@ class UOMError(ValueError):
 # Built-in defaults; config/uom.yaml (same content) can extend them via load_uom_config.
 _ALIASES: dict[str, str] = {
     "ton": "ton", "tons": "ton", "t": "ton", "mt": "ton",
-    "kg": "kg", "kgs": "kg",
+    "kg": "kg", "kgs": "kg", "k": "kg",
     "pc": "pc", "pcs": "pc", "piece": "pc", "pieces": "pc", "ea": "pc",
+    "p": "pc",
 }
 _MASS_TO_KG: dict[str, float] = {"ton": 1000.0, "kg": 1.0}
 

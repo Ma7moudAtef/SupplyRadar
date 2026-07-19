@@ -52,3 +52,26 @@ def test_unparseable_date_blocks(tmp_path, frames):
             df.to_excel(writer, sheet_name=name, index=False)
     with pytest.raises(SchemaError, match="date"):
         load_workbook(path)
+
+
+def test_rate_uom_aliases_map_to_canonical(tmp_path, frames):
+    """Abbreviated rate units (k/t, p/s, t/d) are a VERIFIED relabel of the
+    three canonical branches and must normalize to them; plain single-letter
+    uoms (t/p/k) likewise. Unknown spellings still pass through untouched so
+    validation's blocking rule catches them."""
+    frames["consumption_figs"]["std_cons_rate_uom"] = ["k/t", "p/s"]
+    frames["consumption"]["cons_rate_uom"] = (
+        ["k/t"] * 8 + ["p/s"] * 8)
+    frames["bom"]["uom"] = ["T", "P"]
+    frames["stock"]["uom"] = ["t", "p"]
+    path = tmp_path / "aliased.xlsx"
+    with pd.ExcelWriter(path) as writer:
+        for name, df in frames.items():
+            df.to_excel(writer, sheet_name=name, index=False)
+    data = load_workbook(path)
+    assert data.consumption_figs["std_cons_rate_uom"].tolist() == [
+        "kg/ton", "pc/heat"]
+    assert set(data.consumption["cons_rate_uom"]) == {"kg/ton", "pc/heat"}
+    # plain uoms normalize via the uom module at use time
+    from supplyradar.core.uom import normalize_uom
+    assert [normalize_uom(u) for u in data.stock["uom"]] == ["ton", "pc"]
