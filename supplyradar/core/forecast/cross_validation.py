@@ -29,15 +29,19 @@ class CVResult:
     residuals: np.ndarray = field(repr=False, default=None)
 
 def rolling_validate(values: np.ndarray, spec: ModelSpec, window: int, *,
+                     weights: np.ndarray | None = None,
                      min_train: int = 2, max_folds: int = 8
                      ) -> CVResult | None:
     """One-step-ahead rolling-origin validation of (model, lookback window).
 
     For each origin t: train on values[t-window : t] (clipped to history
-    start), predict period t, compare to the actual. Returns None when the
-    pipeline never produced a usable forecast.
+    start), predict period t, compare to the actual. `weights` (production
+    quantity per month, aligned to `values`) is sliced the same way and passed
+    to weighted-average models. Returns None when the pipeline never produced a
+    usable forecast.
     """
     v = np.asarray(values, dtype=float)
+    w_all = None if weights is None else np.asarray(weights, dtype=float)
     n = len(v)
     origins = [t for t in range(max(min_train, spec.min_points), n)]
     origins = origins[-max_folds:]
@@ -46,8 +50,10 @@ def rolling_validate(values: np.ndarray, spec: ModelSpec, window: int, *,
 
     preds, actuals = [], []
     for t in origins:
-        train = v[max(0, t - window): t]
-        pred = spec.fit_predict(train, 1)
+        lo = max(0, t - window)
+        train = v[lo: t]
+        w = None if w_all is None else w_all[lo: t]
+        pred = spec.fit_predict(train, 1, weights=w)
         if pred is None:
             continue
         preds.append(float(pred[0]))

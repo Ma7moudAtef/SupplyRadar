@@ -63,7 +63,10 @@ with st.expander("Risk settings", expanded=False):
         stage_days[stage] = int(stage_cols[i % len(stage_cols)].number_input(
             display.get(stage, stage).title() if stage == "gap"
             else display.get(stage, stage),
-            min_value=0, max_value=548, value=0, key=f"risk_{stage}"))
+            min_value=0, max_value=548, value=0, key=f"risk_{stage}",
+            help=f"Flag an item if it starts consuming from the "
+                 f"'{display.get(stage, stage)}' supply stage within this many "
+                 "days (0 = don't flag on this stage)."))
         i += 1
 
 # at-risk flags from the planner's windows
@@ -105,23 +108,36 @@ def _label(code: str) -> str:
 
 f1, f2, f3, f4, f5 = st.columns([2, 2, 2, 3, 3])
 cats = sorted(bom["category_level1"].dropna().unique())
-sel_cat = f1.multiselect("Category", cats)
+sel_cat = f1.multiselect(
+    "Category", cats,
+    help="Show only materials in the chosen top-level categories.")
 sub = bom if not sel_cat else bom.loc[bom["category_level1"].isin(sel_cat)]
 cats2 = sorted(sub["category_level2"].dropna().unique())
-sel_cat2 = f2.multiselect("Sub-category", cats2)
+sel_cat2 = f2.multiselect(
+    "Sub-category", cats2,
+    help="Narrow further to sub-categories within the chosen categories.")
 if sel_cat2:
     sub = sub.loc[sub["category_level2"].isin(sel_cat2)]
-sel_stage = f3.multiselect("Reaches stage", stages_present,
-                           format_func=lambda s: display.get(s, s))
+sel_stage = f3.multiselect(
+    "Reaches stage", stages_present, format_func=lambda s: display.get(s, s),
+    help="Show only materials that at some point consume from the chosen "
+         "supply stage(s).")
 item_options = sorted(projection["item_code"].unique(), key=_label)
-sel_items = f4.multiselect("Items (only show)", item_options,
-                           format_func=_label)
-hide_items = f5.multiselect("Hide items", item_options, format_func=_label)
+sel_items = f4.multiselect(
+    "Items (only show)", item_options, format_func=_label,
+    help="Restrict the chart to just these materials.")
+hide_items = f5.multiselect(
+    "Hide items", item_options, format_func=_label,
+    help="Remove these materials from the chart (applied after the filters "
+         "above).")
 
 c1, c2 = st.columns([1, 2])
-at_risk_only = c1.toggle("Show items at risk only", value=False)
-granularity = c2.radio("Granularity", ["day", "week", "month"],
-                       horizontal=True, label_visibility="collapsed")
+at_risk_only = c1.toggle(
+    "Show items at risk only", value=False,
+    help="Show only materials flagged by the risk windows set above.")
+granularity = c2.radio(
+    "Time granularity", ["day", "week", "month"], horizontal=True,
+    help="Aggregate the timeline to daily, weekly or monthly points.")
 
 items = set(sub["item_code"]) & set(projection["item_code"])
 if sel_items:

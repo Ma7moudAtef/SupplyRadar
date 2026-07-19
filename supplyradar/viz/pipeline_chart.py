@@ -49,11 +49,14 @@ DEFAULT_DELIVERY_CYCLE = [
 ]
 
 TITLE_COLOR = "#1a2b4c"
-SUBTITLE_COLOR = "#6b7280"
+SUBTITLE_COLOR = "#4b5563"       # darkened from #6b7280 for readability
+AXIS_INK = "#1a2b4c"            # axis titles / tick labels / legend text — dark on white
 ITEM_LABEL_COLOR = "#1f4e9c"
 OUTLINE_COLOR = "#333333"
-SAFETY_COLOR = "#27ae60"
-OVERSTOCK_COLOR = "#e74c3c"
+SAFETY_COLOR = "#1e8449"        # darkened green so the tick text reads on white
+OVERSTOCK_COLOR = "#c0392b"     # darkened red so the tick text reads on white
+LINE_SAFETY_COLOR = "#27ae60"  # the drawn dashed line stays the brighter hue
+LINE_OVERSTOCK_COLOR = "#e74c3c"
 GRID_COLOR = "#e8e8e8"
 FONT_FAMILY = "Inter, Helvetica, system-ui, sans-serif"
 
@@ -232,10 +235,12 @@ def build_pipeline_chart(
                 hoverinfo="skip", name=_stage_label(GAP_STAGE, display_names)))
             seen_stages.add(GAP_STAGE)
 
-        # single continuous top outline per item
+        # single continuous top outline per item (spline-smoothed so few-lane
+        # views read as gently curved, not polygonal)
         fig.add_trace(go.Scatter(
             x=dense_x, y=off + dense_y, mode="lines",
-            line=dict(color=OUTLINE_COLOR, width=1.5),
+            line=dict(color=OUTLINE_COLOR, width=1.5,
+                      shape="spline" if n <= 12 else "linear", smoothing=0.5),
             showlegend=False, hoverinfo="skip"))
 
         # invisible markers carrying the tooltip (decimated on very tall charts;
@@ -266,12 +271,15 @@ def build_pipeline_chart(
             item, off, safety * scale, over * scale, safety, over,
             display_names, show_ticks=n <= max_tick_lanes))
 
-    # reference lines: one trace each for the whole figure
+    # reference lines: one trace each for the whole figure. Curved (spline) so
+    # the time-varying thresholds read as smooth guides, not sawtooth polylines.
     fig.add_trace(go.Scatter(x=_x_array(safety_x), y=_y_array(safety_y), mode="lines",
-                             line=dict(color=SAFETY_COLOR, width=1.2, dash="dash"),
+                             line=dict(color=LINE_SAFETY_COLOR, width=1.4,
+                                       dash="dash", shape="spline", smoothing=0.6),
                              showlegend=False, hoverinfo="skip"))
     fig.add_trace(go.Scatter(x=_x_array(over_x), y=_y_array(over_y), mode="lines",
-                             line=dict(color=OVERSTOCK_COLOR, width=1.2, dash="dash"),
+                             line=dict(color=LINE_OVERSTOCK_COLOR, width=1.4,
+                                       dash="dash", shape="spline", smoothing=0.6),
                              showlegend=False, hoverinfo="skip"))
     fig.add_trace(go.Scatter(x=_x_array(zero_x), y=_y_array(zero_y), mode="lines",
                              line=dict(color="black", width=1),
@@ -282,7 +290,7 @@ def build_pipeline_chart(
     span_days = (x_max - x_min).days
     fig.update_layout(
         paper_bgcolor="white", plot_bgcolor="white",
-        font=dict(family=FONT_FAMILY, color="#333"),
+        font=dict(family=FONT_FAMILY, color=AXIS_INK),
         title=dict(
             text=(f"<b>{title}</b><br>"
                   f"<span style='font-size:12px;color:{SUBTITLE_COLOR}'>"
@@ -294,16 +302,18 @@ def build_pipeline_chart(
         # 'closest' shows ONLY the lane under the cursor (planner feedback:
         # a unified tooltip for 100+ lanes is unreadable)
         hovermode="closest",
-        hoverlabel=dict(bgcolor="white", bordercolor="#d9d9d9",
-                        font=dict(family=FONT_FAMILY, size=12, color="#333")),
+        hoverlabel=dict(bgcolor="white", bordercolor="#b8c0cc",
+                        font=dict(family=FONT_FAMILY, size=12, color=AXIS_INK)),
         legend=dict(
             orientation="h", x=0.5, xanchor="center", y=1.0, yanchor="bottom",
             title=dict(text="<b>Supply Stage (Fill Color)</b>",
-                       font=dict(size=11, color="#333"), side="top"),
-            font=dict(size=11), itemsizing="constant",
+                       font=dict(size=11, color=AXIS_INK), side="top"),
+            font=dict(size=11, color=AXIS_INK), itemsizing="constant",
             bordercolor="rgba(0,0,0,0)"),
         xaxis=dict(
-            title="Date", showgrid=True, gridcolor=GRID_COLOR, gridwidth=1,
+            title=dict(text="Date", font=dict(size=13, color=AXIS_INK)),
+            tickfont=dict(size=11, color=AXIS_INK),
+            showgrid=True, gridcolor=GRID_COLOR, gridwidth=1,
             zeroline=False, showline=False,
             dtick=7 * 86_400_000 if span_days <= 130 else "M1",
             tickformat="%b %-d" if span_days <= 130 else "%b %Y",
@@ -526,8 +536,8 @@ def _add_legend_entries(fig, stages_eta, seen_stages, palette, display_names):
             name=_stage_label(stage, display_names),
             legendgroup=f"stage-{stage}", showlegend=True, hoverinfo="skip"))
     for name, color, dash in (
-            ("Overstock (max)", OVERSTOCK_COLOR, "dash"),
-            ("Safety Stock (min)", SAFETY_COLOR, "dash"),
+            ("Overstock (max)", LINE_OVERSTOCK_COLOR, "dash"),
+            ("Safety Stock (min)", LINE_SAFETY_COLOR, "dash"),
             ("Zero Stock", "black", "solid")):
         fig.add_trace(go.Scatter(
             x=[None], y=[None], mode="lines",

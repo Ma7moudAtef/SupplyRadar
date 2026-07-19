@@ -37,7 +37,9 @@ def _data_sidebar() -> None:
         help="The 7-sheet input_data_form workbook. Leave empty to use the "
              "bundled default dataset.")
     path_text = st.sidebar.text_input(
-        "…or a path on this machine", placeholder="/data/input_data_form.xlsx")
+        "…or a path on this machine", placeholder="/data/input_data_form.xlsx",
+        help="Point at a workbook already on this machine instead of "
+             "uploading. Leave empty to use the bundled default dataset.")
 
     file_bytes: bytes | None = None
     using_default = False

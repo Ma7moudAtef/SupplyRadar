@@ -9,9 +9,10 @@ from __future__ import annotations
 import pandas as pd
 import plotly.graph_objects as go
 
-CATEGORY_CYCLE = ["#1f4e9c", "#7c94c4", "#b08b4f", "#5b8a72", "#8a94a6", "#4f6d7a"]
+CATEGORY_CYCLE = ["#1f4e9c", "#5b73a8", "#8a6d2f", "#3f6f56", "#5b6472", "#3a5560"]
 FONT_FAMILY = "Inter, Helvetica, system-ui, sans-serif"
 GRID_COLOR = "#e8e8e8"
+AXIS_INK = "#1a2b4c"            # axis titles / tick labels / legend text
 
 def build_cost_over_time_chart(
     consumption: pd.DataFrame,
@@ -41,13 +42,18 @@ def build_cost_over_time_chart(
                           ": $%{y:,.0f}<extra></extra>"))
     fig.update_layout(
         barmode="stack",
-        title=dict(text=f"<b>{title}</b>", x=0.01, font=dict(size=16, color="#1a2b4c")),
+        title=dict(text=f"<b>{title}</b>", x=0.01, font=dict(size=16, color=AXIS_INK)),
         paper_bgcolor="white", plot_bgcolor="white",
-        font=dict(family=FONT_FAMILY, color="#333"),
-        xaxis=dict(title="Month", showgrid=False),
-        yaxis=dict(title="Cost ($)", showgrid=True, gridcolor=GRID_COLOR),
+        font=dict(family=FONT_FAMILY, color=AXIS_INK),
+        xaxis=dict(title=dict(text="Month", font=dict(color=AXIS_INK)),
+                   tickfont=dict(color=AXIS_INK), showgrid=False),
+        yaxis=dict(title=dict(text="Cost ($)", font=dict(color=AXIS_INK)),
+                   tickfont=dict(color=AXIS_INK), showgrid=True, gridcolor=GRID_COLOR),
         hovermode="x unified",
-        legend=dict(orientation="h", x=1.0, xanchor="right", y=1.08),
+        hoverlabel=dict(bgcolor="white", bordercolor="#b8c0cc",
+                        font=dict(family=FONT_FAMILY, color=AXIS_INK)),
+        legend=dict(orientation="h", x=1.0, xanchor="right", y=1.08,
+                    font=dict(color=AXIS_INK)),
         margin=dict(l=60, r=30, t=70, b=50),
         height=420,
     )
@@ -69,11 +75,14 @@ def build_cost_by_category_chart(
         marker_color=CATEGORY_CYCLE[0],
         hovertemplate="%{y}: $%{x:,.0f}<extra></extra>"))
     fig.update_layout(
-        title=dict(text=f"<b>{title}</b>", x=0.01, font=dict(size=16, color="#1a2b4c")),
+        title=dict(text=f"<b>{title}</b>", x=0.01, font=dict(size=16, color=AXIS_INK)),
         paper_bgcolor="white", plot_bgcolor="white",
-        font=dict(family=FONT_FAMILY, color="#333"),
-        xaxis=dict(title="Cost ($)", showgrid=True, gridcolor=GRID_COLOR),
-        yaxis=dict(title=""),
+        font=dict(family=FONT_FAMILY, color=AXIS_INK),
+        xaxis=dict(title=dict(text="Cost ($)", font=dict(color=AXIS_INK)),
+                   tickfont=dict(color=AXIS_INK), showgrid=True, gridcolor=GRID_COLOR),
+        yaxis=dict(title="", tickfont=dict(color=AXIS_INK)),
+        hoverlabel=dict(bgcolor="white", bordercolor="#b8c0cc",
+                        font=dict(family=FONT_FAMILY, color=AXIS_INK)),
         margin=dict(l=140, r=30, t=70, b=50),
         height=max(300, 60 + 36 * len(totals)),
     )

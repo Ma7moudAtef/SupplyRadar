@@ -33,6 +33,17 @@ from .selector import confidence_score, rank_pipelines
 _SPEC_BY_NAME = {m.name: m for m in MODEL_LIBRARY}
 
 @dataclass
+class TopForecast:
+    """One of the top-ranked competing pipelines and its point forecast."""
+
+    rank: int
+    model: str
+    window: int
+    memory: str
+    smape: float
+    forecast: pd.DataFrame                # month, rate
+
+@dataclass
 class ComboForecast:
     """Forecast result for one (item, output_type, production_line) series."""
 
@@ -41,12 +52,14 @@ class ComboForecast:
     production_line: str
     rate_uom: str
     history: pd.Series                    # PeriodIndex -> actual monthly rate
+    consumption: pd.Series                # PeriodIndex -> actual monthly consumption
     behavior: BehaviorProfile
     competition: pd.DataFrame             # ranked pipelines
     selected_model: str
     selected_window: int
     effective_memory: str
     forecast: pd.DataFrame                # month, rate, lo80, hi80, lo95, hi95
+    top_forecasts: list[TopForecast]      # top 3 competitors, best first
     explanation: str
     recommendation: str
     confidence: float                     # 0-100
@@ -94,9 +107,14 @@ def run_item_forecast(
                         generated_at=datetime.now().isoformat(timespec="seconds"))
 
 def run_all_items(data: WorkbookData, horizon_months: int,
-                  *, progress=None) -> pd.DataFrame:
-    """Fleet overview: one row per item-combo with the winning pipeline."""
-    items = data.stock["item_code"].dropna().unique().tolist()
+                  *, items: list[str] | None = None, progress=None) -> pd.DataFrame:
+    """Fleet overview: one row per item-combo with the winning pipeline.
+
+    `items` restricts the competition to a chosen subset of materials (a hand
+    pick or a category group); None runs every stock item.
+    """
+    if items is None:
+        items = data.stock["item_code"].dropna().unique().tolist()
     rows = []
     for i, item in enumerate(items):
         fc = run_item_forecast(data, item, horizon_months)
@@ -188,6 +206,32 @@ def forecast_projected_consumption(
     return out[CONSUMPTION_COLUMNS].sort_values(
         ["item_code", "date"]).reset_index(drop=True)
 
+def build_comparison_table(combo: ComboForecast) -> tuple[pd.DataFrame, list[str]]:
+    """History + the top-3 competing forecasts, stacked by month.
+
+    Historical months carry the actual rate and consumption; future months
+    carry each of the top-3 pipelines' forecast rate. Returns (frame,
+    forecast_column_names) so the UI can add an editable 'Your projection'
+    column and lock the rest. Rate is the forecast variable throughout.
+    """
+    hist = pd.DataFrame({
+        "Month": combo.history.index.astype(str),
+        "Actual rate": combo.history.to_numpy(dtype=float),
+        "Actual consumption": combo.consumption.to_numpy(dtype=float),
+    })
+    fc_cols: list[str] = []
+    fut = pd.DataFrame({"Month": combo.forecast["month"].astype(str)})
+    for t in combo.top_forecasts:
+        col = f"{t.rank}. {t.model} ({t.memory})"
+        fc_cols.append(col)
+        fut[col] = t.forecast["rate"].to_numpy(dtype=float)
+    table = pd.concat([hist, fut], ignore_index=True)
+    for col in ["Actual rate", "Actual consumption", *fc_cols]:
+        if col not in table.columns:
+            table[col] = np.nan
+    ordered = ["Month", "Actual rate", "Actual consumption", *fc_cols]
+    return table[ordered], fc_cols
+
 def expected_monthly_consumption(
     data: WorkbookData, combo: ComboForecast, base_date: str | pd.Timestamp
 ) -> pd.DataFrame:
@@ -231,6 +275,7 @@ def _forecast_combo(rs: RateSeries, horizon: int, *,
                     override_model: str | None,
                     override_window: int | None) -> ComboForecast:
     values = rs.values
+    weights = rs.weights
     n = len(values)
     behavior = analyze_behavior(values, missing_pct=_missing_pct(rs))
     intermittent = behavior.classification == "Intermittent"
@@ -238,7 +283,7 @@ def _forecast_combo(rs: RateSeries, horizon: int, *,
     results: list[CVResult] = []
     for spec in applicable_models(n, intermittent=intermittent):
         for window in feasible_windows(n, heavy=spec.heavy):
-            res = rolling_validate(values, spec, window)
+            res = rolling_validate(values, spec, window, weights=weights)
             if res is not None:
                 results.append(res)
     competition = rank_pipelines(results)
@@ -259,20 +304,18 @@ def _forecast_combo(rs: RateSeries, horizon: int, *,
         residuals = winner.abs_errors
         smape = float(win["smape"])
 
-    spec = _SPEC_BY_NAME[sel_model]
-    train = values[-sel_window:]
-    point = spec.fit_predict(train, horizon)
-    if point is None:
-        point = np.repeat(train[-1] if len(train) else 0.0, horizon)
+    months = pd.period_range(rs.series.index[-1] + 1, periods=horizon, freq="M")
+    point = _point_forecast(values, weights, sel_model, sel_window, horizon)
 
     q80 = float(np.quantile(residuals, 0.80)) if len(residuals) else 0.0
     q95 = float(np.quantile(residuals, 0.95)) if len(residuals) else 0.0
-    months = pd.period_range(rs.series.index[-1] + 1, periods=horizon, freq="M")
     forecast = pd.DataFrame({
         "month": months, "rate": point,
         "lo80": np.maximum(point - q80, 0.0), "hi80": point + q80,
         "lo95": np.maximum(point - q95, 0.0), "hi95": point + q95,
     })
+
+    top_forecasts = _top_forecasts(competition, values, weights, n, horizon, months)
 
     memory = "all history" if sel_window >= n else f"{sel_window} months"
     quality = float(max(0.0, 100.0 * (1 - behavior.missing_pct
@@ -282,9 +325,11 @@ def _forecast_combo(rs: RateSeries, horizon: int, *,
     return ComboForecast(
         item_code=rs.item_code, output_type=rs.output_type,
         production_line=rs.production_line, rate_uom=rs.rate_uom,
-        history=rs.series, behavior=behavior, competition=competition,
+        history=rs.series, consumption=rs.consumption, behavior=behavior,
+        competition=competition,
         selected_model=sel_model, selected_window=sel_window,
         effective_memory=memory, forecast=forecast,
+        top_forecasts=top_forecasts,
         explanation=explain_selection(competition, behavior, n),
         recommendation=recommend(behavior, smape, behavior.missing_pct),
         confidence=conf,
@@ -292,6 +337,34 @@ def _forecast_combo(rs: RateSeries, horizon: int, *,
         forecastability=float(max(0.0, 0.5 * conf + 50.0 * (1 - cv_pen))),
         flags=list(rs.flags),
         is_override=bool(override_model or override_window))
+
+def _point_forecast(values: np.ndarray, weights: np.ndarray | None,
+                    model: str, window: int, horizon: int) -> np.ndarray:
+    """Fit `model` on the last `window` months and forecast `horizon` ahead."""
+    spec = _SPEC_BY_NAME[model]
+    train = values[-window:]
+    w = None if weights is None else weights[-window:]
+    point = spec.fit_predict(train, horizon, weights=w)
+    if point is None:
+        point = np.repeat(train[-1] if len(train) else 0.0, horizon)
+    return np.asarray(point, dtype=float)
+
+def _top_forecasts(competition: pd.DataFrame, values: np.ndarray,
+                   weights: np.ndarray | None, n: int, horizon: int,
+                   months: pd.PeriodIndex) -> list[TopForecast]:
+    """Point forecast for each of the top-3 ranked pipelines, best first."""
+    if competition.empty:
+        return []
+    out: list[TopForecast] = []
+    for _, row in competition.sort_values("rank").head(3).iterrows():
+        window = int(row["window"])
+        point = _point_forecast(values, weights, str(row["model"]), window, horizon)
+        out.append(TopForecast(
+            rank=int(row["rank"]), model=str(row["model"]), window=window,
+            memory="all history" if window >= n else f"{window} months",
+            smape=float(row["smape"]),
+            forecast=pd.DataFrame({"month": months, "rate": point})))
+    return out
 
 def _apply_override(competition: pd.DataFrame, model: str | None,
                     window: int | None) -> pd.DataFrame:

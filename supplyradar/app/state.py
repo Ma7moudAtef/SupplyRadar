@@ -123,6 +123,13 @@ def cached_run_all(fingerprint: str, horizon: int,
                    _data: WorkbookData) -> pd.DataFrame:
     return run_all_items(_data, horizon)
 
+@st.cache_data(show_spinner="Running the competition for the selected materials…")
+def cached_run_selected(fingerprint: str, horizon: int, items: tuple[str, ...],
+                        _data: WorkbookData) -> pd.DataFrame:
+    """Competition over a chosen subset of materials (hand pick or a category
+    group). Cached on the exact item set so re-selecting is instant."""
+    return run_all_items(_data, horizon, items=list(items))
+
 def switched_forecasts() -> dict[str, ItemForecast]:
     """item_code -> the ItemForecast the planner switched the projection to."""
     return st.session_state.setdefault("sr_switched", {})

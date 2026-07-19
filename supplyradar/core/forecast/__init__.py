@@ -11,6 +11,7 @@ explained, and planners can override model / lookback / horizon.
 from .engine import (  # noqa: F401
                      ComboForecast,
                      ItemForecast,
+                     TopForecast,
                      forecast_projected_consumption,
                      run_all_items,
                      run_item_forecast,

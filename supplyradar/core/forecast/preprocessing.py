@@ -34,6 +34,7 @@ class RateSeries:
     rate_uom: str
     series: pd.Series          # PeriodIndex('M') -> rate (float, NaN = unknown)
     consumption: pd.Series     # monthly material consumption (base uom)
+    production: pd.Series       # monthly production driver, aligned to series
     flags: list[str] = field(default_factory=list)
 
     @property
@@ -44,6 +45,12 @@ class RateSeries:
     def values(self) -> np.ndarray:
         """Rate values with interior NaN filled by interpolation (flagged)."""
         return self.series.to_numpy(dtype=float)
+
+    @property
+    def weights(self) -> np.ndarray:
+        """Production quantity per month, aligned to `values` — the weight a
+        weighted-average model uses to aggregate the rate."""
+        return self.production.to_numpy(dtype=float)
 
     @property
     def n_valid(self) -> int:
@@ -67,6 +74,7 @@ def build_rate_series(data: WorkbookData, *, items: list[str] | None = None
     cf_uom = (data.consumption_figs
               .set_index(["item_code", "output_type", "production_line"])
               ["std_cons_rate_uom"].to_dict())
+    drivers = _monthly_production_drivers(data)
 
     has_rate = "cons_rate" in cons.columns
     if not has_rate:
@@ -93,6 +101,7 @@ def build_rate_series(data: WorkbookData, *, items: list[str] | None = None
         months = pd.period_range(grp["month"].min(), grp["month"].max(), freq="M")
         series = grp.set_index("month")["rate"].reindex(months)
         consumption = grp.set_index("month")["consumption"].reindex(months)
+        production = _combo_production(drivers, otype, line, rate_uom, months)
 
         n_missing = int(series.isna().sum())
         if n_missing:
@@ -116,8 +125,31 @@ def build_rate_series(data: WorkbookData, *, items: list[str] | None = None
         out[key] = RateSeries(item_code=item, output_type=otype,
                               production_line=line, rate_uom=rate_uom,
                               series=series, consumption=consumption,
-                              flags=flags)
+                              production=production, flags=flags)
     return out
+
+def _monthly_production_drivers(data: WorkbookData) -> pd.DataFrame:
+    """Actual monthly production per (output_type, production_line): the mass
+    (qty1), heat count (qty2) and calendar days behind each month's rate."""
+    prod = data.prod.loc[data.prod["production_type"] == "actual"].copy()
+    prod["month"] = prod["date"].dt.to_period("M")
+    g = (prod.groupby(["output_type", "production_line", "month"])
+         [["production_qty1", "production_qty2"]].sum())
+    return g
+
+def _combo_production(drivers: pd.DataFrame, otype: str, line: str,
+                      rate_uom: str, months: pd.PeriodIndex) -> pd.Series:
+    """Production driver for one combo, aligned to `months`. The driver matches
+    the rate's denominator: mass for kg/ton, heats for pc/heat, days for
+    ton/day (near-uniform, so ton/day stays effectively an unweighted mean)."""
+    if rate_uom == "ton/day":
+        return pd.Series(months.days_in_month.astype(float), index=months)
+    col = "production_qty1" if rate_uom == "kg/ton" else "production_qty2"
+    try:
+        sub = drivers.loc[(otype, line), col]
+    except KeyError:
+        return pd.Series(0.0, index=months)
+    return sub.reindex(months).fillna(0.0)
 
 def _derive_rates(cons: pd.DataFrame, data: WorkbookData) -> pd.DataFrame:
     """Fallback for workbooks without cons_rate columns: rate from monthly

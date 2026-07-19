@@ -56,6 +56,18 @@ def test_simple_models_hand_computed():
     assert wma == pytest.approx((1 * 1 + 2 * 2 + 3 * 3 + 4 * 4) / 10)
 
 
+def test_weighted_moving_average_uses_production_weights():
+    train = np.array([1.0, 2.0, 3.0, 4.0])
+    # production quantities weight the rate: the last month produced most
+    weights = np.array([10.0, 10.0, 10.0, 100.0])
+    out = _SPEC["Weighted Moving Average"].fit_predict(train, 1, weights=weights)[0]
+    assert out == pytest.approx((1 * 10 + 2 * 10 + 3 * 10 + 4 * 100) / 130)
+    # zero / missing production weights fall back to recency weighting
+    zero = _SPEC["Weighted Moving Average"].fit_predict(
+        train, 1, weights=np.zeros(4))[0]
+    assert zero == pytest.approx((1 * 1 + 2 * 2 + 3 * 3 + 4 * 4) / 10)
+
+
 def test_seasonal_naive_repeats_last_season():
     train = np.arange(1.0, 14.0)  # 13 points
     out = _SPEC["Seasonal Naive"].fit_predict(train, 3)
@@ -161,6 +173,31 @@ def test_manual_override_pins_model(data):
     # naive continues the last value flat
     assert c.forecast["rate"].tolist() == pytest.approx(
         [c.history.iloc[-1]] * 3)
+
+
+def test_top_forecasts_and_comparison_table(data):
+    from supplyradar.core.forecast.engine import build_comparison_table
+
+    data = _trend_workbook(data)
+    fc = run_item_forecast(data, "it-1", 6)
+    c = fc.combos[0]
+    # top-3 competitors are exposed, best first, each with a full-horizon forecast
+    assert 1 <= len(c.top_forecasts) <= 3
+    assert c.top_forecasts[0].rank == 1
+    assert all(len(t.forecast) == 6 for t in c.top_forecasts)
+
+    table, fc_cols = build_comparison_table(c)
+    # history rows carry actuals; forecast rows carry the top-3 columns
+    assert {"Month", "Actual rate", "Actual consumption"} <= set(table.columns)
+    assert len(fc_cols) == len(c.top_forecasts)
+    hist_months = c.history.index.astype(str).tolist()
+    fut_months = c.forecast["month"].astype(str).tolist()
+    assert table["Month"].tolist() == hist_months + fut_months
+    # a history row has an actual rate but no forecast; a future row is the reverse
+    hist_row = table.iloc[0]
+    fut_row = table.iloc[len(hist_months)]
+    assert pd.notna(hist_row["Actual rate"]) and pd.isna(hist_row[fc_cols[0]])
+    assert pd.isna(fut_row["Actual rate"]) and pd.notna(fut_row[fc_cols[0]])
 
 
 def test_forecast_rows_drive_stock_projection(data):

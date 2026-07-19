@@ -1,9 +1,14 @@
 """Forecast — the AMCIP planner dashboard.
 
-Per material: intelligence card, history + forecast + confidence band,
-model competition with the winner highlighted, explanation, recommendation,
-manual override (model / lookback / horizon), and the SWITCH that makes the
-forecast drive the stock projection instead of the standard plan rates.
+Per material: a compact intelligence card (statistical features), the
+history + forecast + confidence chart, a per-stream comparison table
+(historical figures + top-3 competing forecasts + an editable "Your
+projection" column), the model competition with the winner highlighted, the
+explanation, the recommendation, a manual override (model / lookback /
+horizon), and the SWITCH that makes the forecast drive the stock projection.
+
+The planner chooses which production streams to forecast (output type and/or
+line) and which materials to run the fleet competition for.
 """
 
 from __future__ import annotations
@@ -13,10 +18,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+import pandas as pd
 import streamlit as st
 
 from supplyradar.app import state
-from supplyradar.core.forecast.engine import expected_monthly_consumption
+from supplyradar.app.components.tables import highlight_rows
+from supplyradar.core.forecast.engine import build_comparison_table, expected_monthly_consumption
 from supplyradar.viz.forecast_chart import build_forecast_chart
 
 st.title("Forecast")
@@ -28,11 +35,15 @@ if bundle is None:
 labels = state.item_labels(bundle)
 display = bundle["display_names"]
 clean = bundle["clean"]
+bom = clean.bom
 fingerprint = bundle["fingerprint"]
 base_date = bundle["base_date"]
 
 def _label(code: str) -> str:
     return labels.get(code, display.get(code, code))
+
+def _disp(v) -> str:
+    return str(display.get(v, v))
 
 plan_months = (bundle["projection"]["date"].max().to_period("M")
                - base_date.to_period("M")).n
@@ -40,12 +51,16 @@ horizons = [h for h in (3, 6, 12, 18) if h <= max(plan_months, 3)]
 
 top1, top2 = st.columns([3, 1])
 item_options = sorted(clean.stock["item_code"].dropna().unique(), key=_label)
-item = top1.selectbox("Material", item_options, format_func=_label)
-horizon = int(top2.selectbox("Horizon (months)", horizons,
-                             index=min(1, len(horizons) - 1)))
+item = top1.selectbox(
+    "Material", item_options, format_func=_label,
+    help="The material to forecast. Names come from the BOM description; the "
+         "internal item code is used only for joins.")
+horizon = int(top2.selectbox(
+    "Horizon (months)", horizons, index=min(1, len(horizons) - 1),
+    help="How many months ahead to forecast the consumption rate. Capped at "
+         "the production plan's own horizon."))
 
-fc = state.cached_item_forecast(fingerprint, item, horizon, None, None,
-                                clean)
+fc = state.cached_item_forecast(fingerprint, item, horizon, None, None, clean)
 switched = state.switched_forecasts()
 
 if not fc.combos:
@@ -54,45 +69,86 @@ if not fc.combos:
                "plan-rate projection remains in charge.")
     st.stop()
 
+# ------------------------------------------------------- stream filter (5.a)
+avail_types = sorted({c.output_type for c in fc.combos})
+avail_lines = sorted({c.production_line for c in fc.combos})
+flt1, flt2 = st.columns(2)
+sel_types = flt1.multiselect(
+    "Output type(s)", avail_types, default=avail_types, format_func=_disp,
+    help="Choose which output types to forecast (e.g. B only, or both). "
+         "Leave all selected to forecast every type.")
+sel_lines = flt2.multiselect(
+    "Production line(s)", avail_lines, default=avail_lines, format_func=_disp,
+    help="Choose which production lines to forecast (e.g. line 1 only, or "
+         "lines 1 and 2). Combined with output type this yields 1–4 results.")
+sel_types = sel_types or avail_types
+sel_lines = sel_lines or avail_lines
+shown = [c for c in fc.combos
+         if c.output_type in sel_types and c.production_line in sel_lines]
+
 # ------------------------------------------------------------- switch control
 sw1, sw2 = st.columns([3, 1])
-n_avg = fc.combined_smape()
+shown_smape = [c.competition.loc[c.competition["selected"], "smape"].iloc[0]
+               for c in shown if not c.competition.empty]
+avg_smape = (sum(shown_smape) / len(shown_smape)) if shown_smape else float("nan")
 sw1.markdown(
-    f"### {_label(item)} — validation sMAPE {n_avg:.1f}% across "
-    f"{len(fc.combos)} production stream(s)")
+    f"### {_label(item)} — validation sMAPE {avg_smape:.1f}% across "
+    f"{len(shown)} selected stream(s)")
 use_forecast = sw2.toggle(
     "Use forecast in projection", value=item in switched,
-    help="Switch this material's stock projection from the standard plan "
-         "rates to this forecast. The Pipeline page updates immediately.")
+    help="Switch this material's stock projection from the standard plan rates "
+         "to its forecast. All of the material's streams are always applied so "
+         "the projection stays complete — the stream filter above only controls "
+         "what is shown here.")
+
+if not shown:
+    st.info("No production stream matches the current output-type / line "
+            "filter. Widen the selection above.")
+    st.stop()
 
 combo_tabs = st.tabs([
-    f"{display.get(c.output_type, c.output_type).upper()} / line "
-    f"{display.get(c.production_line, c.production_line)} ({c.rate_uom})"
-    for c in fc.combos])
+    f"{_disp(c.output_type).upper()} / line {_disp(c.production_line)} "
+    f"({c.rate_uom})" for c in shown])
 
 manual_active: dict[str, tuple[str | None, int | None]] = {}
-for tab, combo in zip(combo_tabs, fc.combos):
+for tab, combo in zip(combo_tabs, shown):
     with tab:
         b = combo.behavior
-        m = st.columns(6)
-        m[0].metric("Behavior", b.classification)
-        m[1].metric("Volatility (CV)", f"{b.cv:.2f}" if b.cv == b.cv else "—")
-        m[2].metric("Effective memory", combo.effective_memory)
-        m[3].metric("Confidence", f"{combo.confidence:.0f}/100")
-        m[4].metric("Data quality", f"{combo.data_quality:.0f}/100")
-        m[5].metric("Forecastability", f"{combo.forecastability:.0f}/100")
-        m2 = st.columns(6)
-        m2[0].metric("Model", combo.selected_model)
-        trend = ("↑" if b.trend_slope > 0 else "↓") if b.trend_pvalue < 0.05 \
-            else "flat"
-        m2[1].metric("Trend", f"{trend} ({b.trend_strength:.2f})")
-        m2[2].metric("Seasonality", f"{b.seasonality_strength:.2f}")
-        m2[3].metric("History", f"{b.n_points} months")
-        sel_smape = (combo.competition.loc[combo.competition['selected'],
-                                           'smape'].iloc[0]
+        sel_smape = (combo.competition.loc[combo.competition["selected"],
+                                           "smape"].iloc[0]
                      if not combo.competition.empty else float("nan"))
-        m2[4].metric("Validation sMAPE", f"{sel_smape:.1f}%")
-        m2[5].metric("Last retraining", fc.generated_at.split("T")[0])
+        trend = ("rising" if b.trend_slope > 0 else "falling") \
+            if b.trend_pvalue < 0.05 else "flat"
+
+        # ---- 5.b compact statistical-features card (fits on screen) ----------
+        stats = pd.DataFrame({
+            "Feature": ["Behaviour", "Volatility (CV)", "Trend", "Seasonality",
+                        "Effective memory", "History",
+                        "Selected model", "Validation sMAPE", "Confidence",
+                        "Data quality", "Forecastability", "Last retraining"],
+            "Value": [
+                b.classification,
+                f"{b.cv:.2f}" if b.cv == b.cv else "—",
+                f"{trend} ({b.trend_strength:.2f})",
+                f"{b.seasonality_strength:.2f}",
+                combo.effective_memory,
+                f"{b.n_points} months",
+                combo.selected_model,
+                f"{sel_smape:.1f}%",
+                f"{combo.confidence:.0f}/100",
+                f"{combo.data_quality:.0f}/100",
+                f"{combo.forecastability:.0f}/100",
+                fc.generated_at.split("T")[0],
+            ],
+        })
+        st.markdown("**Material intelligence** — statistical features")
+        # three side-by-side 4-row blocks keep every feature on one screen
+        cols = st.columns(3)
+        for i, col in enumerate(cols):
+            block = stats.iloc[i * 4:(i + 1) * 4].reset_index(drop=True)
+            col.dataframe(block.style.set_properties(
+                **{"color": "#1a2b4c", "font-size": "12px"}),
+                width="stretch", hide_index=True)
 
         if combo.recommendation.startswith("Automatic"):
             st.success(combo.recommendation)
@@ -101,16 +157,21 @@ for tab, combo in zip(combo_tabs, fc.combos):
         if combo.flags:
             st.caption("Data flags: " + "; ".join(combo.flags))
 
-        # manual override
+        # ---- manual override (#3 help on every choice) -----------------------
         with st.expander("Manual override (model / lookback)"):
             models = ["(automatic)"] + sorted(
                 combo.competition["model"].unique().tolist())
             windows = ["(automatic)"] + sorted(
                 combo.competition["window"].unique().tolist())
             key = f"{combo.output_type}-{combo.production_line}"
-            ov_model = st.selectbox("Model", models, key=f"ovm_{key}")
-            ov_window = st.selectbox("Lookback window (months)", windows,
-                                     key=f"ovw_{key}")
+            ov_model = st.selectbox(
+                "Model", models, key=f"ovm_{key}",
+                help="Force a specific forecasting model instead of the "
+                     "automatically selected winner.")
+            ov_window = st.selectbox(
+                "Lookback window (months)", windows, key=f"ovw_{key}",
+                help="Force how many recent months the model trains on. "
+                     "'all' uses the full history.")
             manual_active[key] = (
                 None if ov_model == "(automatic)" else ov_model,
                 None if ov_window == "(automatic)" else int(ov_window))
@@ -128,16 +189,15 @@ for tab, combo in zip(combo_tabs, fc.combos):
             if manual_combo is not None:
                 manual_fc = manual_combo.forecast
                 man_smape = (manual_combo.competition.loc[
-                    manual_combo.competition['selected'], 'smape'].iloc[0]
-                    if not manual_combo.competition.empty else float('nan'))
+                    manual_combo.competition["selected"], "smape"].iloc[0]
+                    if not manual_combo.competition.empty else float("nan"))
                 st.caption(
                     f"Manual override: {manual_combo.selected_model}, "
                     f"lookback {manual_combo.effective_memory} — sMAPE "
                     f"{man_smape:.1f}% vs automatic {sel_smape:.1f}%.")
 
         expected = expected_monthly_consumption(clean, combo, base_date)
-        uom_lbl = display.get(expected["uom"].iloc[0], expected["uom"].iloc[0]) \
-            if not expected.empty else ""
+        uom_lbl = _disp(expected["uom"].iloc[0]) if not expected.empty else ""
         st.plotly_chart(build_forecast_chart(
             combo.history, combo.forecast,
             rate_label=f"Rate ({combo.rate_uom})",
@@ -147,6 +207,31 @@ for tab, combo in zip(combo_tabs, fc.combos):
             title=f"{_label(item)} — consumption rate, history and forecast"),
             width="stretch", config={"displaylogo": False})
 
+        # ---- 5.c comparison table: history + top-3 + your projection ---------
+        st.markdown("**History, top-3 forecasts and your own projection** "
+                    f"(rate, {combo.rate_uom})")
+        table, fc_cols = build_comparison_table(combo)
+        table["Your projection"] = float("nan")  # float so NumberColumn types cleanly
+        editable_key = f"proj_{item}_{combo.output_type}_{combo.production_line}"
+        edited = st.data_editor(
+            table, width="stretch", hide_index=True, key=editable_key,
+            disabled=[c for c in table.columns if c != "Your projection"],
+            column_config={
+                "Your projection": st.column_config.NumberColumn(
+                    "Your projection",
+                    help="Type your own rate projection for any month; blank "
+                         "cells are ignored.", format="%.4f"),
+                **{c: st.column_config.NumberColumn(c, format="%.4f")
+                   for c in ["Actual rate", *fc_cols]},
+                "Actual consumption": st.column_config.NumberColumn(
+                    "Actual consumption", format="%.2f"),
+            })
+        user_vals = edited["Your projection"].dropna()
+        if not user_vals.empty:
+            st.caption(f"You entered {len(user_vals)} manual projection "
+                       "value(s). These are yours to record; the automatic "
+                       "forecast still drives the projection switch.")
+
         st.markdown("**Why this model**")
         st.text(combo.explanation)
 
@@ -155,18 +240,15 @@ for tab, combo in zip(combo_tabs, fc.combos):
         if not comp.empty:
             comp["window"] = comp["window"].map(
                 lambda w: "all" if w >= b.n_points else f"{int(w)}m")
-            styled = (comp[["model", "window", "n_folds", "mae", "rmse",
-                            "mape", "smape", "mase", "rank", "selected"]]
-                      .style.apply(
-                          lambda r: ["background-color: #eaf3ea"] * len(r)
-                          if r["selected"] else [""] * len(r), axis=1)
-                      .format({"mae": "{:.4f}", "rmse": "{:.4f}",
-                               "mape": "{:.1f}", "smape": "{:.1f}",
-                               "mase": "{:.2f}"}))
+            view = comp[["model", "window", "n_folds", "mae", "rmse",
+                         "mape", "smape", "mase", "rank", "selected"]]
+            styled = highlight_rows(view, comp["selected"]).format(
+                {"mae": "{:.4f}", "rmse": "{:.4f}", "mape": "{:.1f}",
+                 "smape": "{:.1f}", "mase": "{:.2f}"})
             st.dataframe(styled, width="stretch", hide_index=True)
 
-# apply the switch AFTER overrides are known: the displayed forecast is what
-# gets applied (manual override included when one is active)
+# apply the switch AFTER overrides are known (uses the full item forecast so
+# every stream is projected; an active override on a shown stream is honoured)
 if use_forecast and item not in switched:
     ov_models = {k: v for k, v in manual_active.items() if v != (None, None)}
     if ov_models:
@@ -190,20 +272,43 @@ if switched:
             state.set_switch(code, None)
         st.rerun()
 
-# ------------------------------------------------------------- fleet overview
+# ------------------------------------------------------- fleet competition (5.c)
 st.divider()
-st.subheader("All materials — competition overview")
-if st.button("Run the competition for every material"):
-    st.session_state["sr_run_all"] = True
-if st.session_state.get("sr_run_all"):
-    overview = state.cached_run_all(fingerprint, horizon, clean)
+st.subheader("Run the competition for chosen materials")
+scope = st.radio(
+    "Scope", ["Selected materials", "By category"], horizontal=True,
+    help="Pick the materials to compete individually, or run a whole "
+         "category group at once.")
+if scope == "Selected materials":
+    chosen = st.multiselect(
+        "Materials", item_options, format_func=_label,
+        help="The materials to run the forecast competition for. Each takes a "
+             "few seconds; results are cached.")
+    run_items = list(chosen)
+else:
+    cats = sorted(bom["category_level1"].dropna().unique())
+    chosen_cats = st.multiselect(
+        "Categories", cats,
+        help="Every material in the chosen category groups is competed.")
+    run_items = bom.loc[bom["category_level1"].isin(chosen_cats),
+                        "item_code"].tolist()
+    run_items = [i for i in run_items if i in set(item_options)]
+
+if st.button("Run competition", disabled=not run_items,
+             help="Runs the rolling-origin competition for the chosen "
+                  "materials and lists the winning model for each stream."):
+    st.session_state["sr_run_items"] = tuple(sorted(set(run_items)))
+
+run_set = st.session_state.get("sr_run_items")
+if run_set:
+    overview = state.cached_run_selected(fingerprint, horizon, run_set, clean)
     if overview.empty:
-        st.write("No material has enough history to forecast.")
+        st.write("No chosen material has enough history to forecast.")
     else:
         overview = overview.assign(
             material=overview["item_code"].map(_label),
-            output_type=overview["output_type"].map(
-                lambda v: display.get(v, v)),
+            output_type=overview["output_type"].map(_disp),
         )[["material", "output_type", "production_line", "classification",
            "model", "memory", "smape", "confidence", "recommendation"]]
-        st.dataframe(overview, width="stretch", hide_index=True)
+        st.dataframe(overview.style.set_properties(**{"color": "#1a2b4c"}),
+                     width="stretch", hide_index=True)

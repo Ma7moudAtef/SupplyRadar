@@ -13,11 +13,12 @@ from plotly.subplots import make_subplots
 
 HISTORY_COLOR = "#1f4e9c"
 FORECAST_COLOR = "#b3541e"
-OVERRIDE_COLOR = "#5b8a72"
+OVERRIDE_COLOR = "#3f6f56"       # darkened for line + legend readability
 BAND_FILL = "rgba(179, 84, 30, 0.15)"
-CONSUMPTION_COLOR = "#7c94c4"
+CONSUMPTION_COLOR = "#5b73a8"    # darkened so the bar legend text reads on white
 FONT_FAMILY = "Inter, Helvetica, system-ui, sans-serif"
 GRID_COLOR = "#e8e8e8"
+AXIS_INK = "#1a2b4c"            # axis titles / tick labels / legend text
 
 def build_forecast_chart(
     history: pd.Series,
@@ -85,18 +86,25 @@ def build_forecast_chart(
                           ": %{y:,.2f}<extra></extra>"),
             row=2, col=1)
         fig.update_yaxes(title_text=consumption_label, row=2, col=1,
-                         showgrid=True, gridcolor=GRID_COLOR)
+                         showgrid=True, gridcolor=GRID_COLOR,
+                         title_font=dict(color=AXIS_INK),
+                         tickfont=dict(color=AXIS_INK))
 
     fig.update_yaxes(title_text=rate_label, row=1, col=1,
-                     showgrid=True, gridcolor=GRID_COLOR, rangemode="tozero")
-    fig.update_xaxes(showgrid=True, gridcolor=GRID_COLOR)
+                     showgrid=True, gridcolor=GRID_COLOR, rangemode="tozero",
+                     title_font=dict(color=AXIS_INK), tickfont=dict(color=AXIS_INK))
+    fig.update_xaxes(showgrid=True, gridcolor=GRID_COLOR,
+                     title_font=dict(color=AXIS_INK), tickfont=dict(color=AXIS_INK))
     fig.update_layout(
         title=dict(text=f"<b>{title}</b>", x=0.01,
-                   font=dict(size=16, color="#1a2b4c")),
+                   font=dict(size=16, color=AXIS_INK)),
         paper_bgcolor="white", plot_bgcolor="white",
-        font=dict(family=FONT_FAMILY, color="#333"),
+        font=dict(family=FONT_FAMILY, color=AXIS_INK),
         hovermode="x unified",
-        legend=dict(orientation="h", x=1.0, xanchor="right", y=1.1),
+        hoverlabel=dict(bgcolor="white", bordercolor="#b8c0cc",
+                        font=dict(family=FONT_FAMILY, color=AXIS_INK)),
+        legend=dict(orientation="h", x=1.0, xanchor="right", y=1.1,
+                    font=dict(color=AXIS_INK)),
         margin=dict(l=70, r=30, t=70, b=50),
         height=520 if rows == 2 else 400,
         barmode="group",

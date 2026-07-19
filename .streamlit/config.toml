@@ -1,0 +1,11 @@
+# Pin a light theme with dark text. Every chart draws on a white background,
+# so forcing light keeps tables, widget labels and legends dark-on-light and
+# readable — never light font on a light surface, regardless of the viewer's
+# OS dark-mode preference.
+[theme]
+base = "light"
+primaryColor = "#1f4e9c"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f3f5f9"
+textColor = "#1a2b4c"
+font = "sans serif"
