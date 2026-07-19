@@ -175,6 +175,63 @@ def test_manual_override_pins_model(data):
         [c.history.iloc[-1]] * 3)
 
 
+def _two_line_workbook(data):
+    """it-1 consumed on (f,1) at rate 2.0 and (f,2) at rate 4.0 (kg/ton),
+    with line 2 producing 3x the tonnage of line 1."""
+    months = pd.date_range("2024-01-01", periods=14, freq="MS")
+    cons = []
+    for ln, rate in [("1", 2.0), ("2", 4.0)]:
+        cons.append(pd.DataFrame({
+            "date": months, "item_code": "it-1",
+            "cons_qty_base_uom": 0.0, "cons_qty_ton": 0.0, "cons_$": 0.0,
+            "output_type": "f", "production_line": ln,
+            "consumption_type": "actual",
+            "cons_rate": rate, "cons_rate_uom": "kg/ton"}))
+    data.consumption = pd.concat(cons, ignore_index=True)
+    prod = []
+    for ln, q in [("1", 1000.0), ("2", 3000.0)]:
+        prod.append(pd.DataFrame({
+            "date": months, "production_uom1": "ms", "production_qty1": q,
+            "production_uom2": "heat", "production_qty2": q / 100.0,
+            "output_type": "f", "production_line": ln,
+            "production_type": "actual"}))
+    data.prod = pd.concat([data.prod] + prod, ignore_index=True)
+    return data
+
+
+def test_grouping_tree_of_choices(data):
+    data = _two_line_workbook(data)
+    # break out both lines -> 2 forecasts
+    finest = run_item_forecast(data, "it-1", 3, by_output=("f",),
+                               by_line=("1", "2"))
+    assert len(finest.combos) == 2
+    # combine lines (line axis empty) -> ONE forecast covering both lines
+    combined = run_item_forecast(data, "it-1", 3, by_output=("f",), by_line=())
+    assert len(combined.combos) == 1
+    c = combined.combos[0]
+    assert set(c.covers) == {("f", "1"), ("f", "2")}
+    assert c.label == "F / all lines"
+    # production-weighted aggregate rate: (2*1000 + 4*3000)/(1000+3000) = 3.5
+    assert c.history.iloc[-1] == pytest.approx(3.5)
+    assert combined.covered_subcombos == {("f", "1"), ("f", "2")}
+
+
+def test_aggregated_switch_lands_on_every_covered_stream(data):
+    data = _two_line_workbook(data)
+    # give it-1 a plan so the projection has production to apply the rate to
+    plan_months = pd.date_range("2026-01-01", periods=1, freq="MS")
+    data.prod = pd.concat([data.prod, pd.DataFrame({
+        "date": list(plan_months) * 2,
+        "production_uom1": "ms", "production_qty1": [1000.0, 3000.0],
+        "production_uom2": "heat", "production_qty2": [10.0, 30.0],
+        "output_type": "f", "production_line": ["1", "2"],
+        "production_type": "plan"})], ignore_index=True)
+    fc = run_item_forecast(data, "it-1", 3, by_output=("f",), by_line=())
+    rows = forecast_projected_consumption(data, {"it-1": fc}, "2026-01-01")
+    covered = set(zip(rows["output_type"], rows["production_line"]))
+    assert covered == {("f", "1"), ("f", "2")}  # aggregate applied to both lines
+
+
 def test_top_forecasts_and_comparison_table(data):
     from supplyradar.core.forecast.engine import build_comparison_table
 

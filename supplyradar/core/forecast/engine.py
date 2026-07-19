@@ -27,7 +27,7 @@ from .cross_validation import CVResult, rolling_validate
 from .explanation import explain_selection, recommend
 from .memory import feasible_windows
 from .models import MODEL_LIBRARY, applicable_models
-from .preprocessing import RateSeries, build_rate_series
+from .preprocessing import RateSeries, build_rate_series, flag_rate_series
 from .selector import confidence_score, rank_pipelines
 
 _SPEC_BY_NAME = {m.name: m for m in MODEL_LIBRARY}
@@ -43,13 +43,24 @@ class TopForecast:
     smape: float
     forecast: pd.DataFrame                # month, rate
 
+ALL = "all"  # collapsed-axis label: this group aggregates every value of the axis
+
 @dataclass
 class ComboForecast:
-    """Forecast result for one (item, output_type, production_line) series."""
+    """Forecast result for one production-stream GROUP of an item.
+
+    A group is one or more (output_type, production_line) sub-combos aggregated
+    into a single rate series (total consumption / total production). When the
+    planner breaks an axis out fully, each group is a single sub-combo; when an
+    axis is left combined, `output_type`/`production_line` read 'all' and
+    `covers` lists every sub-combo the group aggregates.
+    """
 
     item_code: str
-    output_type: str
-    production_line: str
+    output_type: str                      # a value, or 'all' when combined
+    production_line: str                   # a value, or 'all' when combined
+    covers: list[tuple[str, str]]          # the (output_type, line) sub-combos
+    label: str                             # human label for the stream group
     rate_uom: str
     history: pd.Series                    # PeriodIndex -> actual monthly rate
     consumption: pd.Series                # PeriodIndex -> actual monthly consumption
@@ -80,31 +91,110 @@ class ItemForecast:
                 for c in self.combos if not c.competition.empty]
         return float(np.mean(vals)) if vals else float("nan")
 
+    @property
+    def covered_subcombos(self) -> set[tuple[str, str]]:
+        """Every (output_type, line) sub-combo this forecast drives — used to
+        decide which plan rows the projection switch replaces."""
+        return {sub for c in self.combos for sub in c.covers}
+
 def run_item_forecast(
     data: WorkbookData,
     item_code: str,
     horizon_months: int,
     *,
+    by_output: tuple[str, ...] | None = None,
+    by_line: tuple[str, ...] | None = None,
     min_history: int = 3,
     override_model: str | None = None,
     override_window: int | None = None,
 ) -> ItemForecast:
-    """Compete pipelines and forecast every combo of one item.
+    """Compete pipelines and forecast each production-stream group of one item.
 
-    Overrides (Step 12 manual control) pin the model and/or lookback window;
-    the competition still runs so the planner sees what automation would do.
+    Grouping (the planner's 'tree of choices'):
+      None            -> break the axis out fully (one group per value present)
+      () empty tuple  -> combine the axis (one group aggregating every value)
+      (v1, v2, ...)   -> break out only these values
+    So `by_output=('b',), by_line=()` yields ONE forecast for output type B with
+    its lines aggregated; `by_output=('b',), by_line=('1','2')` yields two.
+
+    Overrides pin the model and/or lookback window; the competition still runs
+    so the planner sees what automation would do.
     """
     all_series = build_rate_series(data, items=[item_code])
+    present = sorted(all_series.keys())  # (item, output_type, line) tuples
+    out_branches = _branches(sorted({k[1] for k in present}), by_output)
+    line_branches = _branches(sorted({k[2] for k in present}), by_line)
+
     combos: list[ComboForecast] = []
-    for key, rs in sorted(all_series.items()):
-        if rs.n_valid < min_history or float(np.nansum(np.abs(rs.values))) == 0:
-            continue
-        combos.append(_forecast_combo(rs, horizon_months,
-                                      override_model=override_model,
-                                      override_window=override_window))
+    for o_label, o_vals in out_branches:
+        for l_label, l_vals in line_branches:
+            members = [all_series[k] for k in present
+                       if k[1] in o_vals and k[2] in l_vals]
+            if not members:
+                continue
+            covers = [(k[1], k[2]) for k in present
+                      if k[1] in o_vals and k[2] in l_vals]
+            rs = _aggregate_members(members, item_code, o_label, l_label)
+            if rs.n_valid < min_history or float(np.nansum(np.abs(rs.values))) == 0:
+                continue
+            combos.append(_forecast_combo(
+                rs, horizon_months, covers=covers,
+                label=_group_label(o_label, l_label),
+                override_model=override_model, override_window=override_window))
     return ItemForecast(item_code=item_code, horizon_months=horizon_months,
                         combos=combos,
                         generated_at=datetime.now().isoformat(timespec="seconds"))
+
+def _branches(present_values: list[str], selection: tuple[str, ...] | None
+              ) -> list[tuple[str, frozenset[str]]]:
+    """Turn an axis selection into (label, covered-values) branches.
+
+    None -> one branch per present value (full breakout); () -> one combined
+    branch over all present values; a tuple -> one branch per chosen value that
+    is actually present.
+    """
+    if selection is None:
+        return [(v, frozenset({v})) for v in present_values]
+    if len(selection) == 0:
+        return [(ALL, frozenset(present_values))] if present_values else []
+    chosen = [v for v in selection if v in present_values]
+    return [(v, frozenset({v})) for v in chosen]
+
+def _group_label(o_label: str, l_label: str) -> str:
+    o = "all types" if o_label == ALL else o_label.upper()
+    ln = "all lines" if l_label == ALL else f"line {l_label}"
+    return f"{o} / {ln}"
+
+def _aggregate_members(members: list[RateSeries], item_code: str,
+                       o_label: str, l_label: str) -> RateSeries:
+    """Aggregate sub-combo rate series into one: the rate is total consumption
+    over total production, i.e. a production-weighted mean of the member rates
+    (num = sum rate_i*prod_i, den = sum prod_i). All members share a rate uom
+    (verified: each item has a single std_cons_rate_uom)."""
+    if len(members) == 1:
+        m = members[0]
+        return RateSeries(item_code=item_code, output_type=o_label,
+                          production_line=l_label, rate_uom=m.rate_uom,
+                          series=m.series, consumption=m.consumption,
+                          production=m.production, flags=list(m.flags))
+    months = members[0].series.index
+    for m in members[1:]:
+        months = months.union(m.series.index)
+    num = pd.Series(0.0, index=months)
+    den = pd.Series(0.0, index=months)
+    cons = pd.Series(0.0, index=months)
+    for m in members:
+        r = m.series.reindex(months).fillna(0.0)
+        p = m.production.reindex(months).fillna(0.0)
+        num = num + r * p
+        den = den + p
+        cons = cons + m.consumption.reindex(months).fillna(0.0)
+    rate = pd.Series(np.where(den > 0, num / den.replace(0, np.nan), 0.0),
+                     index=months).fillna(0.0)
+    return RateSeries(item_code=item_code, output_type=o_label,
+                      production_line=l_label, rate_uom=members[0].rate_uom,
+                      series=rate, consumption=cons, production=den,
+                      flags=flag_rate_series(rate))
 
 def run_all_items(data: WorkbookData, horizon_months: int,
                   *, items: list[str] | None = None, progress=None) -> pd.DataFrame:
@@ -172,15 +262,24 @@ def forecast_projected_consumption(
             rates = c.forecast.set_index("month")["rate"].reindex(
                 all_months).ffill().bfill()
             if c.rate_uom == "ton/day":
+                # flat tons/day: the group rate is the total already, so it is
+                # emitted once (not once per covered sub-combo)
                 df = pd.DataFrame({"date": dates})
                 df["month"] = df["date"].dt.to_period("M")
                 df["natural_qty"] = df["month"].map(rates).astype(float)
                 df["natural_uom"] = "ton"
-            else:
-                df = plan_grid.loc[
-                    (plan_grid["output_type"] == c.output_type)
-                    & (plan_grid["production_line"] == c.production_line)
-                ].copy()
+                df["item_code"] = item
+                df["output_type"] = c.output_type
+                df["production_line"] = c.production_line
+                frames.append(df[["date", "item_code", "output_type",
+                                  "production_line", "natural_qty", "natural_uom"]])
+                continue
+            # kg/ton and pc/heat: apply the group's rate to EACH covered
+            # sub-combo's planned production (so an aggregated B rate lands on
+            # B line 1 and B line 2)
+            for o_sub, l_sub in c.covers:
+                df = plan_grid.loc[(plan_grid["output_type"] == o_sub)
+                                   & (plan_grid["production_line"] == l_sub)].copy()
                 if df.empty:
                     continue
                 rate = df["month"].map(rates).astype(float)
@@ -190,11 +289,11 @@ def forecast_projected_consumption(
                 else:  # pc/heat
                     df["natural_qty"] = rate * df["production_qty2"]
                     df["natural_uom"] = "pc"
-            df["item_code"] = item
-            df["output_type"] = c.output_type
-            df["production_line"] = c.production_line
-            frames.append(df[["date", "item_code", "output_type",
-                              "production_line", "natural_qty", "natural_uom"]])
+                df["item_code"] = item
+                df["output_type"] = o_sub
+                df["production_line"] = l_sub
+                frames.append(df[["date", "item_code", "output_type",
+                                  "production_line", "natural_qty", "natural_uom"]])
 
     if not frames:
         return pd.DataFrame(columns=CONSUMPTION_COLUMNS)
@@ -236,13 +335,17 @@ def expected_monthly_consumption(
     data: WorkbookData, combo: ComboForecast, base_date: str | pd.Timestamp
 ) -> pd.DataFrame:
     """Forecast Consumption = forecast rate x planned production, monthly,
-    for one combo. Columns: month, qty (item's bom uom), uom."""
+    summed across the group's covered sub-combos. Columns: month, qty (item's
+    bom uom), uom."""
     base_date = pd.Timestamp(base_date)
-    plan = data.prod.loc[
+    covers = set(combo.covers)
+    combo_plan = data.prod.loc[
         (data.prod["production_type"] == "plan")
-        & (data.prod["output_type"] == combo.output_type)
-        & (data.prod["production_line"] == combo.production_line)
         & (data.prod["date"] >= base_date)].copy()
+    combo_plan = combo_plan.loc[[
+        (o, ln) in covers for o, ln in
+        zip(combo_plan["output_type"], combo_plan["production_line"])]]
+    plan = combo_plan
     bom = data.bom.set_index("item_code")
     uom = bom.loc[combo.item_code, "uom"]
     wt = bom.loc[combo.item_code, "unit_wt_kg"]
@@ -272,6 +375,7 @@ def expected_monthly_consumption(
 # ------------------------------------------------------------------ internals
 
 def _forecast_combo(rs: RateSeries, horizon: int, *,
+                    covers: list[tuple[str, str]], label: str,
                     override_model: str | None,
                     override_window: int | None) -> ComboForecast:
     values = rs.values
@@ -324,7 +428,8 @@ def _forecast_combo(rs: RateSeries, horizon: int, *,
     conf = confidence_score(smape)
     return ComboForecast(
         item_code=rs.item_code, output_type=rs.output_type,
-        production_line=rs.production_line, rate_uom=rs.rate_uom,
+        production_line=rs.production_line, covers=covers, label=label,
+        rate_uom=rs.rate_uom,
         history=rs.series, consumption=rs.consumption, behavior=behavior,
         competition=competition,
         selected_model=sel_model, selected_window=sel_window,
@@ -386,7 +491,7 @@ def _selected_metric(c: ComboForecast, metric: str) -> float:
 
 def _missing_pct(rs: RateSeries) -> float:
     for f in rs.flags:
-        if f.startswith("missing_periods"):
+        if f.startswith("missing_periods") and ":" in f:
             return int(f.split(":")[1]) / max(len(rs.series), 1)
     return 0.0
 

@@ -128,6 +128,28 @@ def build_rate_series(data: WorkbookData, *, items: list[str] | None = None
                               production=production, flags=flags)
     return out
 
+def flag_rate_series(series: pd.Series) -> list[str]:
+    """Data-quality flags for a monthly rate series (missing / negative /
+    outliers / intermittent). Shared by the finest builder and the aggregator
+    so flag strings keep their ': count' suffix everywhere."""
+    flags: list[str] = []
+    n_missing = int(series.isna().sum())
+    if n_missing:
+        flags.append(f"missing_periods: {n_missing}")
+    s = series.fillna(0.0)
+    if (s < 0).any():
+        flags.append(f"negative_values: {int((s < 0).sum())}")
+    med = s.median()
+    mad = float(np.median(np.abs(s - med)))
+    if mad > 0:
+        n_out = int((np.abs(s - med) > 3 * 1.4826 * mad).sum())
+        if n_out:
+            flags.append(f"extreme_outliers: {n_out}")
+    zero_share = float((s == 0).mean())
+    if zero_share >= 0.4:
+        flags.append(f"intermittent: {zero_share:.0%} zero months")
+    return flags
+
 def _monthly_production_drivers(data: WorkbookData) -> pd.DataFrame:
     """Actual monthly production per (output_type, production_line): the mass
     (qty1), heat count (qty2) and calendar days behind each month's rate."""

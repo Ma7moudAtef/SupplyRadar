@@ -27,6 +27,7 @@ from supplyradar.core.forecast import (
     run_all_items,
     run_item_forecast,
 )
+from supplyradar.core.forecast.preprocessing import build_rate_series
 from supplyradar.core.loader import WorkbookData, load_workbook
 from supplyradar.core.prep_consumption import append_to_actuals, build_projected_consumption
 from supplyradar.core.prep_stock import build_stock_projection, stage_entry_dates, summarize_risk
@@ -110,11 +111,24 @@ def label_of(bundle: dict, code: str) -> str:
 
 # ------------------------------------------------------- forecast + switch
 
+@st.cache_data(show_spinner="Reading production streams…")
+def available_streams(fingerprint: str, item_code: str,
+                      _data: WorkbookData) -> tuple[list[str], list[str]]:
+    """Output types and production lines present for an item (for the stream
+    selectors), derived from the finest rate series."""
+    series = build_rate_series(_data, items=[item_code])
+    outs = sorted({k[1] for k in series})
+    lines = sorted({k[2] for k in series})
+    return outs, lines
+
 @st.cache_data(show_spinner="Running the forecast competition…")
 def cached_item_forecast(fingerprint: str, item_code: str, horizon: int,
                          override_model: str | None, override_window: int | None,
+                         by_output: tuple[str, ...] | None,
+                         by_line: tuple[str, ...] | None,
                          _data: WorkbookData) -> ItemForecast:
     return run_item_forecast(_data, item_code, horizon,
+                             by_output=by_output, by_line=by_line,
                              override_model=override_model,
                              override_window=override_window)
 
@@ -163,7 +177,15 @@ def effective_tables(bundle: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
     clean = bundle["clean"]
     base_date = bundle["base_date"]
     default = bundle["projected"]
-    kept = default.loc[~default["item_code"].isin(switched)]
+    # replace ONLY the (item, output_type, line) sub-combos the forecast covers;
+    # streams the planner did not forecast (e.g. F when only B was chosen) keep
+    # their standard plan rows
+    covered = {(i, o, ln) for i, f in switched.items()
+               for (o, ln) in f.covered_subcombos}
+    row_sub = list(zip(default["item_code"], default["output_type"],
+                       default["production_line"]))
+    keep_mask = [s not in covered for s in row_sub]
+    kept = default.loc[keep_mask]
     forecast_rows = forecast_projected_consumption(clean, switched, base_date)
     projected = pd.concat([kept, forecast_rows], ignore_index=True)
     projection = build_stock_projection(clean, projected, base_date)

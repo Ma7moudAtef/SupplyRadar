@@ -173,9 +173,16 @@ production):
    and a recommendation (automatic vs manual review).
 7. **Manual override**: pin the model and/or lookback and compare against the
    automatic pick side by side.
-8. **The switch**: per material, toggle the stock projection from standard
+8. **Stream grouping (tree of choices)**: choose how to break a material's
+   forecast down. Leaving an axis empty combines it into one; picking values
+   breaks them out. Output B with no line = **one** forecast for B (its lines
+   aggregated by total consumption ÷ total production); output B with lines 1
+   and 2 = **two**. A combined forecast drives every stream it covers in the
+   projection (an aggregated B rate lands on B line 1 and B line 2).
+9. **The switch**: per material, toggle the stock projection from standard
    plan rates to the forecast — the Pipeline and Cost pages follow instantly
-   and label the forecast-driven materials.
+   and label the forecast-driven materials. Streams you did not forecast keep
+   their standard plan rate.
 
 ## UI conventions
 

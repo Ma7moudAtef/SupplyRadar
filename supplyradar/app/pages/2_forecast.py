@@ -60,7 +60,23 @@ horizon = int(top2.selectbox(
     help="How many months ahead to forecast the consumption rate. Capped at "
          "the production plan's own horizon."))
 
-fc = state.cached_item_forecast(fingerprint, item, horizon, None, None, clean)
+# ------------------------------------------------------- stream grouping (5.a)
+avail_types, avail_lines = state.available_streams(fingerprint, item, clean)
+flt1, flt2 = st.columns(2)
+sel_types = flt1.multiselect(
+    "Break out output type(s)", avail_types, default=[], format_func=_disp,
+    help="Leave empty to combine all output types into one forecast. Pick "
+         "specific types (e.g. B) to forecast each one separately.")
+sel_lines = flt2.multiselect(
+    "Break out production line(s)", avail_lines, default=[], format_func=_disp,
+    help="Leave empty to combine all lines into one forecast. Pick specific "
+         "lines to forecast each separately. Example: output B + no line = 1 "
+         "forecast for B; output B + lines 1 and 2 = 2 forecasts.")
+by_output = tuple(sel_types)   # empty tuple => combine that axis into one group
+by_line = tuple(sel_lines)
+
+fc = state.cached_item_forecast(fingerprint, item, horizon, None, None,
+                                by_output, by_line, clean)
 switched = state.switched_forecasts()
 
 if not fc.combos:
@@ -69,49 +85,25 @@ if not fc.combos:
                "plan-rate projection remains in charge.")
     st.stop()
 
-# ------------------------------------------------------- stream filter (5.a)
-avail_types = sorted({c.output_type for c in fc.combos})
-avail_lines = sorted({c.production_line for c in fc.combos})
-flt1, flt2 = st.columns(2)
-sel_types = flt1.multiselect(
-    "Output type(s)", avail_types, default=avail_types, format_func=_disp,
-    help="Choose which output types to forecast (e.g. B only, or both). "
-         "Leave all selected to forecast every type.")
-sel_lines = flt2.multiselect(
-    "Production line(s)", avail_lines, default=avail_lines, format_func=_disp,
-    help="Choose which production lines to forecast (e.g. line 1 only, or "
-         "lines 1 and 2). Combined with output type this yields 1–4 results.")
-sel_types = sel_types or avail_types
-sel_lines = sel_lines or avail_lines
-shown = [c for c in fc.combos
-         if c.output_type in sel_types and c.production_line in sel_lines]
-
 # ------------------------------------------------------------- switch control
 sw1, sw2 = st.columns([3, 1])
 shown_smape = [c.competition.loc[c.competition["selected"], "smape"].iloc[0]
-               for c in shown if not c.competition.empty]
+               for c in fc.combos if not c.competition.empty]
 avg_smape = (sum(shown_smape) / len(shown_smape)) if shown_smape else float("nan")
 sw1.markdown(
     f"### {_label(item)} — validation sMAPE {avg_smape:.1f}% across "
-    f"{len(shown)} selected stream(s)")
+    f"{len(fc.combos)} forecast(s)")
 use_forecast = sw2.toggle(
     "Use forecast in projection", value=item in switched,
-    help="Switch this material's stock projection from the standard plan rates "
-         "to its forecast. All of the material's streams are always applied so "
-         "the projection stays complete — the stream filter above only controls "
-         "what is shown here.")
+    help="Switch this material's stock projection to these forecasts. Each "
+         "forecast is applied to every production stream it covers (an "
+         "aggregated B forecast drives B line 1 and B line 2); streams you did "
+         "not forecast keep their standard plan rate.")
 
-if not shown:
-    st.info("No production stream matches the current output-type / line "
-            "filter. Widen the selection above.")
-    st.stop()
-
-combo_tabs = st.tabs([
-    f"{_disp(c.output_type).upper()} / line {_disp(c.production_line)} "
-    f"({c.rate_uom})" for c in shown])
+combo_tabs = st.tabs([f"{c.label} ({c.rate_uom})" for c in fc.combos])
 
 manual_active: dict[str, tuple[str | None, int | None]] = {}
-for tab, combo in zip(combo_tabs, shown):
+for tab, combo in zip(combo_tabs, fc.combos):
     with tab:
         b = combo.behavior
         sel_smape = (combo.competition.loc[combo.competition["selected"],
@@ -181,7 +173,8 @@ for tab, combo in zip(combo_tabs, shown):
                                (None, None))
         if ov != (None, None):
             manual_item = state.cached_item_forecast(
-                fingerprint, item, horizon, ov[0], ov[1], clean)
+                fingerprint, item, horizon, ov[0], ov[1], by_output, by_line,
+                clean)
             manual_combo = next(
                 (c for c in manual_item.combos
                  if (c.output_type, c.production_line)
@@ -247,14 +240,15 @@ for tab, combo in zip(combo_tabs, shown):
                  "smape": "{:.1f}", "mase": "{:.2f}"})
             st.dataframe(styled, width="stretch", hide_index=True)
 
-# apply the switch AFTER overrides are known (uses the full item forecast so
-# every stream is projected; an active override on a shown stream is honoured)
+# apply the switch AFTER overrides are known (at the current grouping; an
+# active override on a shown stream is honoured)
 if use_forecast and item not in switched:
     ov_models = {k: v for k, v in manual_active.items() if v != (None, None)}
     if ov_models:
         any_model, any_window = next(iter(ov_models.values()))
         applied = state.cached_item_forecast(
-            fingerprint, item, horizon, any_model, any_window, clean)
+            fingerprint, item, horizon, any_model, any_window,
+            by_output, by_line, clean)
     else:
         applied = fc
     state.set_switch(item, applied)
