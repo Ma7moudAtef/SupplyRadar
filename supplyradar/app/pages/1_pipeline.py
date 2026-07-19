@@ -6,6 +6,14 @@ only the lane under the cursor, risk windows are fully adjustable (global gap /
 below-safety days plus a separate window per supply stage), and items can be
 hidden from the lanes. Items switched to the AMCIP forecast drive their lanes
 from the forecast.
+
+PERFORMANCE:
+- The risk panel and the filter panel are Apply forms (components/apply.py):
+  composing choices causes NO rerun until the user clicks Apply (unless the
+  sidebar auto-apply toggle is on).
+- The Plotly figure comes from state.cached_pipeline_figure — a zero-copy
+  st.cache_resource keyed on the applied choices — so a rerun with unchanged
+  choices skips the ~3 s rebuild entirely.
 """
 
 from __future__ import annotations
@@ -19,11 +27,12 @@ import numpy as np
 import streamlit as st
 
 from supplyradar.app import state
+from supplyradar.app.components import apply
 from supplyradar.app.components.validation_panel import render_validation_panel
-from supplyradar.viz.pipeline_chart import build_pipeline_chart
 
 st.title("Pipeline Status")
 
+# ---- data guard: everything below needs a computed bundle -------------------
 bundle = state.require_data()
 if bundle is None:
     st.stop()
@@ -41,35 +50,54 @@ projected, projection = state.effective_tables(bundle)
 risk, stage_entries = state.risk_tables(bundle)
 stages_present = [s for s in dict.fromkeys(projection["stock_stage"].dropna())]
 
-# ---------------------------------------------------------------- risk settings
-with st.expander("Risk settings", expanded=False):
-    c1, c2 = st.columns(2)
-    gap_days = int(c1.number_input(
-        "Gap risk window (days)", min_value=1, max_value=548,
-        value=int(defaults.get("at_risk_window_days", 30)),
-        help="Flag an item if its stock runs out within this many days."))
-    safety_days = int(c2.number_input(
-        "Below-safety risk window (days)", min_value=1, max_value=548,
-        value=int(defaults.get("at_risk_window_days", 30)),
-        help="Flag an item if it drops below safety stock within this window."))
-    st.caption("Per-stage windows — flag an item if it starts consuming from "
-               "that stage within N days (0 = off).")
-    stage_days: dict[str, int] = {}
-    stage_cols = st.columns(max(len(stages_present) - 1, 1))
-    i = 0
-    for stage in stages_present:
-        if stage == "warehouse":
-            continue  # consuming from the warehouse is the healthy state
-        stage_days[stage] = int(stage_cols[i % len(stage_cols)].number_input(
-            display.get(stage, stage).title() if stage == "gap"
-            else display.get(stage, stage),
-            min_value=0, max_value=548, value=0, key=f"risk_{stage}",
-            help=f"Flag an item if it starts consuming from the "
-                 f"'{display.get(stage, stage)}' supply stage within this many "
-                 "days (0 = don't flag on this stage)."))
-        i += 1
+def _label(code: str) -> str:
+    """Display label (BOM description) for an item code."""
+    return labels.get(code, display.get(code, code))
 
-# at-risk flags from the planner's windows
+# ---- risk settings panel (Apply form) ---------------------------------------
+# Values live in session_state under their widget keys; with the form they only
+# change when 'Apply risk settings' is clicked.
+with st.expander("Risk settings", expanded=False):
+    with apply.panel("risk_settings"):
+        c1, c2 = st.columns(2)
+        c1.number_input(
+            "Gap risk window (days)", min_value=1, max_value=548,
+            value=int(defaults.get("at_risk_window_days", 30)), key="risk_gap_days",
+            help="Flag an item if its stock runs out within this many days.")
+        c2.number_input(
+            "Below-safety risk window (days)", min_value=1, max_value=548,
+            value=int(defaults.get("at_risk_window_days", 30)), key="risk_safety_days",
+            help="Flag an item if it drops below safety stock within this "
+                 "window.")
+        st.caption("Per-stage windows — flag an item if it starts consuming "
+                   "from that stage within N days (0 = off).")
+        stage_cols = st.columns(max(len(stages_present) - 1, 1))
+        i = 0
+        for stg in stages_present:
+            if stg == "warehouse":
+                continue  # consuming from the warehouse is the healthy state
+            stage_cols[i % len(stage_cols)].number_input(
+                display.get(stg, stg).title() if stg == "gap"
+                else display.get(stg, stg),
+                min_value=0, max_value=548, value=0, key=f"risk_stage_{stg}",
+                help=f"Flag an item if it starts consuming from the "
+                     f"'{display.get(stg, stg)}' supply stage within this many "
+                     "days (0 = don't flag on this stage).")
+            i += 1
+        apply.button("Apply risk settings",
+                     help="Recompute the headline and at-risk flags with "
+                          "these windows.")
+
+# read the APPLIED values (form semantics: unchanged until Apply)
+gap_days = int(st.session_state.get("risk_gap_days",
+                                    defaults.get("at_risk_window_days", 30)))
+safety_days = int(st.session_state.get("risk_safety_days",
+                                       defaults.get("at_risk_window_days", 30)))
+stage_days = {stg: int(st.session_state.get(f"risk_stage_{stg}", 0))
+              for stg in stages_present if stg != "warehouse"}
+
+# ---- at-risk flags from the applied windows ---------------------------------
+# cheap python loop over <=138 items; recomputed per rerun by design
 entry_days = stage_entries.set_index(["item_code", "stock_stage"])[
     "days_from_start"]
 triggers: dict[str, list[str]] = {}
@@ -79,14 +107,15 @@ for row in risk.itertuples(index=False):
         fired.append(f"gap in {int(row.time_to_gap_days)}d")
     if row.time_to_below_safety_days <= safety_days:
         fired.append(f"below safety in {int(row.time_to_below_safety_days)}d")
-    for stage, days in stage_days.items():
+    for stg, days in stage_days.items():
         if days > 0:
-            d = entry_days.get((row.item_code, stage), np.inf)
+            d = entry_days.get((row.item_code, stg), np.inf)
             if d <= days:
-                fired.append(f"{display.get(stage, stage)} in {int(d)}d")
+                fired.append(f"{display.get(stg, stg)} in {int(d)}d")
     if fired:
         triggers[row.item_code] = fired
 
+# ---- the one-line answer, before any chart ----------------------------------
 n_gap = int((risk["time_to_gap_days"] <= gap_days).sum())
 n_below = int((risk["time_to_below_safety_days"] <= safety_days).sum())
 headline = (f"### {n_gap} item(s) go to gap within {gap_days} days. "
@@ -102,43 +131,58 @@ if switched:
     st.caption("Forecast-driven lanes (AMCIP switch): "
                + ", ".join(sorted(labels.get(i, i) for i in switched)))
 
-# ---------------------------------------------------------------- filters
-def _label(code: str) -> str:
-    return labels.get(code, display.get(code, code))
+# ---- filter panel (Apply form) ----------------------------------------------
+item_options = sorted(projection["item_code"].unique(), key=_label)
+with apply.panel("pipeline_filters"):
+    f1, f2, f3, f4, f5 = st.columns([2, 2, 2, 3, 3])
+    f1.multiselect(
+        "Category", sorted(bom["category_level1"].dropna().unique()),
+        key="flt_cat",
+        help="Show only materials in the chosen top-level categories.")
+    # sub-category options derive from the APPLIED categories (form values)
+    applied_cats = st.session_state.get("flt_cat", [])
+    sub_src = bom if not applied_cats else \
+        bom.loc[bom["category_level1"].isin(applied_cats)]
+    f2.multiselect(
+        "Sub-category", sorted(sub_src["category_level2"].dropna().unique()),
+        key="flt_cat2",
+        help="Narrow further to sub-categories within the chosen categories.")
+    f3.multiselect(
+        "Reaches stage", stages_present, key="flt_stage",
+        format_func=lambda s: display.get(s, s),
+        help="Show only materials that at some point consume from the chosen "
+             "supply stage(s).")
+    f4.multiselect(
+        "Items (only show)", item_options, key="flt_items", format_func=_label,
+        help="Restrict the chart to just these materials.")
+    f5.multiselect(
+        "Hide items", item_options, key="flt_hide", format_func=_label,
+        help="Remove these materials from the chart (applied after the "
+             "filters above).")
 
-f1, f2, f3, f4, f5 = st.columns([2, 2, 2, 3, 3])
-cats = sorted(bom["category_level1"].dropna().unique())
-sel_cat = f1.multiselect(
-    "Category", cats,
-    help="Show only materials in the chosen top-level categories.")
+    c1, c2 = st.columns([1, 2])
+    c1.toggle(
+        "Show items at risk only", value=False, key="flt_at_risk",
+        help="Show only materials flagged by the risk windows set above.")
+    c2.radio(
+        "Time granularity", ["day", "week", "month"], horizontal=True,
+        key="flt_gran",
+        help="Aggregate the timeline to daily, weekly or monthly points.")
+    apply.button("Apply filters",
+                 help="Redraw the chart and tables with these filters.")
+
+# ---- resolve the applied filters into the item set --------------------------
+sel_cat = st.session_state.get("flt_cat", [])
+sel_cat2 = st.session_state.get("flt_cat2", [])
+sel_stage = st.session_state.get("flt_stage", [])
+sel_items = st.session_state.get("flt_items", [])
+hide_items = st.session_state.get("flt_hide", [])
+at_risk_only = bool(st.session_state.get("flt_at_risk", False))
+granularity = st.session_state.get("flt_gran", "day")
+
 sub = bom if not sel_cat else bom.loc[bom["category_level1"].isin(sel_cat)]
-cats2 = sorted(sub["category_level2"].dropna().unique())
-sel_cat2 = f2.multiselect(
-    "Sub-category", cats2,
-    help="Narrow further to sub-categories within the chosen categories.")
 if sel_cat2:
     sub = sub.loc[sub["category_level2"].isin(sel_cat2)]
-sel_stage = f3.multiselect(
-    "Reaches stage", stages_present, format_func=lambda s: display.get(s, s),
-    help="Show only materials that at some point consume from the chosen "
-         "supply stage(s).")
-item_options = sorted(projection["item_code"].unique(), key=_label)
-sel_items = f4.multiselect(
-    "Items (only show)", item_options, format_func=_label,
-    help="Restrict the chart to just these materials.")
-hide_items = f5.multiselect(
-    "Hide items", item_options, format_func=_label,
-    help="Remove these materials from the chart (applied after the filters "
-         "above).")
-
-c1, c2 = st.columns([1, 2])
-at_risk_only = c1.toggle(
-    "Show items at risk only", value=False,
-    help="Show only materials flagged by the risk windows set above.")
-granularity = c2.radio(
-    "Time granularity", ["day", "week", "month"], horizontal=True,
-    help="Aggregate the timeline to daily, weekly or monthly points.")
-
 items = set(sub["item_code"]) & set(projection["item_code"])
 if sel_items:
     items &= set(sel_items)
@@ -154,15 +198,17 @@ if at_risk_only:
 ordered = [i for i in risk["item_code"] if i in items]  # time-to-gap ascending
 filtered = projection.loc[projection["item_code"].isin(items)]
 
+# ---- the chart, from the zero-copy figure cache -----------------------------
 if not ordered:
     st.info("No items match the current filters — clear a filter to see lanes.")
 else:
-    fig = build_pipeline_chart(
-        filtered, bom, stage_palette=bundle["palette"], items=ordered,
-        granularity=granularity,
-        display_names={**display, **labels},  # lanes/hover show descriptions
-        lane_px=int(defaults.get("lane_px", 110)),
-        max_tick_lanes=int(defaults.get("max_tick_lanes", 20)))
+    fig = state.cached_pipeline_figure(
+        (bundle["fingerprint"], str(bundle["base_date"].date()),
+         state.switch_state_key()),
+        projection, bom, dict(bundle["palette"]), {**display, **labels},
+        tuple(ordered), granularity,
+        int(defaults.get("lane_px", 110)),
+        int(defaults.get("max_tick_lanes", 20)))
     st.plotly_chart(fig, width="stretch",
                     config={"scrollZoom": True, "displaylogo": False})
 
@@ -187,6 +233,7 @@ with st.expander("How to read this chart"):
   A red area below the zero line is a projected shortage.
 """)
 
+# ---- at-risk table under the applied windows --------------------------------
 st.subheader("At risk under the current windows")
 at_risk_tbl = risk.loc[risk["item_code"].isin(triggers)].copy()
 if at_risk_tbl.empty:
@@ -208,5 +255,6 @@ else:
                          format="YYYY-MM-DD"),
                  })
 
+# raw numbers for anyone who wants to audit the lanes
 with st.expander("Raw projection data"):
     st.dataframe(filtered, width="stretch", hide_index=True)

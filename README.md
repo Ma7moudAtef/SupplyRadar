@@ -10,6 +10,10 @@ consumed (warehouse → each incoming delivery lot → red `gap` when the pipeli
 runs dry). Geometry and color are independent — the top curve stays continuous
 across color changes.
 
+**Working on the code?** See [`DOCUMENTATION.md`](DOCUMENTATION.md) — a
+file-by-file guide to every module, the data flow, the caching/performance
+model, and the Apply-button system.
+
 ## Quick start
 
 ```bash

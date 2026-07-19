@@ -27,12 +27,16 @@ within = int(defaults.get("at_risk_window_days", 30))
 labels = state.item_labels(bundle)
 clean = bundle["clean"]
 
+# ---- effective (switch-aware) consumption, joined to BOM categories ---------
+# effective_tables/risk_tables are memoized in session_state, so this page adds
+# no recomputation on reruns beyond the cheap sums below.
 projected, _ = state.effective_tables(bundle)
 risk, _entries = state.risk_tables(bundle)
 plan = projected.merge(
     clean.bom[["item_code", "category_level1", "category_level2"]],
     on="item_code", how="left")
 
+# ---- the one-line answer: total projected spend + the share at risk ---------
 total_cost = plan["cons_$"].sum()
 at_risk_items = set(risk.loc[risk["at_risk"], "item_code"])
 risk_cost = plan.loc[plan["item_code"].isin(at_risk_items), "cons_$"].sum()

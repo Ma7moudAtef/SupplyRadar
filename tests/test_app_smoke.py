@@ -12,12 +12,20 @@ st_testing = pytest.importorskip("streamlit.testing.v1")
 MAIN = str(Path(__file__).resolve().parents[1] / "supplyradar" / "app" / "main.py")
 
 
+def _click(at, label):
+    """Click a button (incl. form submit buttons) by its label."""
+    btn = [b for b in at.button if b.label == label][0]
+    btn.set_value(True)
+
+
 def test_app_walks_every_page(workbook_path):
     at = st_testing.AppTest.from_file(MAIN, default_timeout=60)
     at.run()
     assert not at.exception
 
+    # the intake sits behind the 'Load data' Apply form now
     at.sidebar.text_input[0].set_value(str(workbook_path))
+    _click(at, "Load data")
     at.run()
     assert not at.exception
     assert at.sidebar.success  # "N items projected ..."
@@ -47,6 +55,7 @@ def test_uploaded_workbook_overrides_the_default(workbook_path):
     at = st_testing.AppTest.from_file(MAIN, default_timeout=60)
     at.run()
     at.sidebar.text_input[0].set_value(str(workbook_path))
+    _click(at, "Load data")
     at.run()
     assert not at.exception
     assert at.sidebar.success
