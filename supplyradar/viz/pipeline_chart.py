@@ -171,8 +171,7 @@ def build_pipeline_chart(
 
     refine = _refine_factor(n, df["date"].nunique())
     hover_step = 1 if n <= 40 else 7
-    date_strings = {d: pd.Timestamp(d).strftime("%b %-d, %Y")
-                    for d in df["date"].unique()}
+    date_strings = {d: _fmt_date(d) for d in df["date"].unique()}
     lanes = {item: grp for item, grp in df.groupby("item_code", sort=False)}
 
     for item in order:
@@ -432,6 +431,18 @@ def _uom_label(uom: str, display_names: Mapping[str, str]) -> str:
     fallback = {"ton": "Ton", "pc": "PC", "kg": "Kg"}
     return display_names.get(uom, fallback.get(uom, uom))
 
+def _fmt_date(d) -> str:
+    """'Feb 23, 2025' — built without strftime's no-padding directive.
+
+    '%-d' is a glibc (Linux/mac) extension and Windows' C runtime rejects it
+    with 'ValueError: Invalid format string' (Windows spells it '%#d'). Using
+    the day as a plain int keeps the app runnable on any OS. Plotly
+    tickformat/hovertemplate strings may keep '%-d': those run in the
+    browser via d3-time-format, which supports it everywhere.
+    """
+    ts = pd.Timestamp(d)
+    return f"{ts.strftime('%b')} {ts.day}, {ts.year}"
+
 def _fmt(v: float) -> str:
     if not np.isfinite(v):
         return "∞"
@@ -454,8 +465,7 @@ def _hover_texts(item: str, lane: pd.DataFrame, palette: Mapping[str, str],
         stage = row.stock_stage
         color = palette.get(stage, "#333")
         uom = _uom_label(row.uom, display_names)
-        date_s = date_strings.get(row.date) or pd.Timestamp(row.date).strftime(
-            "%b %-d, %Y")
+        date_s = date_strings.get(row.date) or _fmt_date(row.date)
         lines = [
             f"<b>{item_disp}</b>",
             f"Date: {date_s}",

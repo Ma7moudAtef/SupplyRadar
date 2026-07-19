@@ -21,6 +21,16 @@ pip install -r requirements.txt
 make run                        # = streamlit run supplyradar/app/main.py
 ```
 
+On Windows (no `make`), run the same command directly from the repo root:
+
+```bat
+python -m streamlit run supplyradar/app/main.py
+```
+
+The app is OS-independent (Windows / macOS / Linux) — run it locally or on
+any web server; always start it from the repository root so the bundled
+default dataset and `.streamlit/config.toml` are picked up.
+
 The app ships with a bundled sample dataset (`data/default_input_public.xlsx`)
 so it renders immediately with no setup — open it and the Pipeline Status
 dashboard is already populated. Upload your own workbook (or paste a path) in
