@@ -50,6 +50,33 @@ def test_gap_is_always_red_even_when_palette_says_otherwise():
     assert all(t.fillcolor == GAP_COLOR for t in gap_fills)
 
 
+def _rgb(hex_color: str) -> tuple[int, int, int]:
+    return tuple(int(hex_color[i:i + 2], 16) for i in (1, 3, 5))
+
+
+def _luminance(hex_color: str) -> float:
+    r, g, b = _rgb(hex_color)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def test_delivery_stages_are_blues_light_to_dark_never_greenish():
+    """Warehouse is green; supply stages are DISTINCT shades of blue running
+    light (nearest arrival) to dark (furthest) — spread across the full ramp
+    regardless of how many stages the file has, so none can be confused with
+    the warehouse green (or each other)."""
+    for stages in (["s1", "s2"], ["s1", "s2", "s3"],
+                   ["s1", "s2", "s3", "s4", "s5"]):
+        palette = resolve_stage_palette(["warehouse", *stages, "gap"])
+        assert palette["warehouse"] == "#27ae60"
+        blues = [palette[s] for s in stages]
+        assert len(set(blues)) == len(blues), "shades must be distinct"
+        lums = [_luminance(c) for c in blues]
+        assert lums == sorted(lums, reverse=True), "must run light -> dark"
+        for c in blues:  # blue channel dominates -> never reads as green
+            r, g, b = _rgb(c)
+            assert b > g > r, f"{c} is not a blue shade"
+
+
 def test_negative_qty_rendered_not_clipped():
     fig = build_pipeline_chart(make_projection(n_items=1))
     lane_floor = 0.0  # single lane: its zero line sits at offset 0

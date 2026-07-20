@@ -157,7 +157,10 @@ The signature multi-lane stage-encoded inventory area chart.
 - One lane per item; area height = projected stock; fill color = the supply
   bucket currently feeding the plant; geometry and color are independent.
 - Stage vocabulary is read from the data; `gap` is ALWAYS red (the one rule
-  no palette can override); delivery labels get cycle colors in ETA order
+  no palette can override); `warehouse` is green; delivery labels get shades
+  of BLUE from a light→dark ramp, spread evenly across it in ETA order
+  (nearest supply lightest, furthest darkest — `_spread_ramp`) so supply
+  stages are never confusable with the warehouse green
   (`palette_from_delivery` — computed once so filtering never repaints).
 - Per-lane normalization (`display_y = offset + value/lane_max`), PCHIP
   smoothing (no overshoot → no phantom stock on delivery step-ups),
@@ -273,7 +276,7 @@ Headless CLI: `python -m supplyradar.prep.run --workbook … --base-date …
 
 | File | Contents |
 |---|---|
-| `palette.yaml` | Stage anchors (warehouse green, gap red — gap is not overridable) + the delivery-label color cycle assigned in ETA order. |
+| `palette.yaml` | Stage anchors (warehouse green, gap red — gap is not overridable) + the delivery-label BLUE ramp (light→dark), spread evenly across the file's supply stages in ETA order. |
 | `uom.yaml` | UOM aliases + mass factors (extends the built-in table). |
 | `defaults.yaml` | UI knobs: at-risk window, lane pixels, tick-lane cap. |
 

@@ -211,9 +211,11 @@ production):
 
 ## Design notes on the chart
 
-- Stage vocabulary is read from the data at runtime; delivery labels get their
-  colors in ETA order. `gap` is **always red** — the one palette rule that
-  cannot be overridden (`config/palette.yaml`).
+- Stage vocabulary is read from the data at runtime; `warehouse` is green and
+  delivery labels get shades of blue from a light→dark ramp, spread evenly in
+  ETA order (nearest supply lightest, furthest darkest) so no supply stage
+  resembles the warehouse green. `gap` is **always red** — the one palette
+  rule that cannot be overridden (`config/palette.yaml`).
 - Each lane is normalized to its own maximum (`display_y = offset +
   value / lane_max`), because 138 items in tons, pieces and kg span orders of
   magnitude; tick labels show real quantities (0 black, safety green,

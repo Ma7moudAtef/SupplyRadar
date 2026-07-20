@@ -43,9 +43,13 @@ WAREHOUSE_STAGE = "warehouse"
 
 GAP_COLOR = "#e74c3c"  # reserved; always red, always loud
 DEFAULT_STAGE_COLORS = {WAREHOUSE_STAGE: "#27ae60", GAP_STAGE: GAP_COLOR}
+# Delivery-stage ramp: shades of BLUE only, light -> dark. Supply stages are
+# spread evenly across it in ETA order (nearest arrival = lightest, furthest =
+# darkest), so no supply stage can ever resemble the warehouse green, the gap
+# red, or the safety/overstock line colors.
 DEFAULT_DELIVERY_CYCLE = [
-    "#3498db", "#f39c12", "#9b59b6", "#16a085",
-    "#2980b9", "#8e44ad", "#d35400", "#7f8c8d",
+    "#aed6f1", "#85c1e9", "#5dade2", "#3498db",
+    "#2e86c1", "#2874a6", "#21618c", "#1b4f72",
 ]
 
 TITLE_COLOR = "#1a2b4c"
@@ -70,7 +74,10 @@ def resolve_stage_palette(
     stage_palette: Mapping[str, str] | None = None,
     delivery_cycle: list[str] | None = None,
 ) -> dict[str, str]:
-    """Color per stage. Delivery labels get cycle colors in ETA order.
+    """Color per stage. Warehouse keeps its green anchor; delivery labels get
+    shades from the blue ramp in ETA order — spread EVENLY across the ramp so
+    the full light->dark range is used whether the file has 2 supply stages
+    or 8 (nearest supply lightest, furthest darkest).
 
     'gap' is always GAP_COLOR — that is the one rule no configuration can
     override.
@@ -78,14 +85,26 @@ def resolve_stage_palette(
     palette = dict(DEFAULT_STAGE_COLORS)
     if stage_palette:
         palette.update(stage_palette)
-    cycle = list(delivery_cycle or DEFAULT_DELIVERY_CYCLE)
-    i = 0
-    for stage in stages_in_eta_order:
-        if stage not in palette:
-            palette[stage] = cycle[i % len(cycle)]
-            i += 1
+    ramp = list(delivery_cycle or DEFAULT_DELIVERY_CYCLE)
+    unassigned = [s for s in stages_in_eta_order if s not in palette]
+    for stage, color in zip(unassigned, _spread_ramp(ramp, len(unassigned))):
+        palette[stage] = color
     palette[GAP_STAGE] = GAP_COLOR
     return palette
+
+def _spread_ramp(ramp: list[str], n: int) -> list[str]:
+    """n colors evenly spaced across the ramp, endpoints included, so adjacent
+    stages stay clearly distinguishable. A single stage takes the ramp's
+    middle shade (an endpoint would be too washed / too dark alone); more
+    stages than ramp colors falls back to cycling."""
+    m = len(ramp)
+    if n <= 0 or m == 0:
+        return []
+    if n == 1:
+        return [ramp[m // 2]]
+    if n > m:
+        return [ramp[i % m] for i in range(n)]
+    return [ramp[round(i * (m - 1) / (n - 1))] for i in range(n)]
 
 def palette_from_delivery(
     delivery: pd.DataFrame,
