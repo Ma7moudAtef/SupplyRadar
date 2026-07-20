@@ -50,6 +50,33 @@ def test_gap_is_always_red_even_when_palette_says_otherwise():
     assert all(t.fillcolor == GAP_COLOR for t in gap_fills)
 
 
+def test_display_corners_are_rounded_without_overshoot():
+    """The drawn curve must be visibly rounded at sharp corners (a V and a
+    delivery-style step) while never overshooting the data range and leaving
+    straight segments in place."""
+    from supplyradar.viz.pipeline_chart import _corner_window, _round_corners
+
+    y = np.concatenate([np.linspace(1.0, 0.0, 100),   # straight decline
+                        np.zeros(50),                  # flat at zero
+                        np.linspace(0.9, 0.3, 100)])   # step-up then decline
+    win = _corner_window(len(y))
+    assert win >= 3, "a long daily lane must get real corner rounding"
+    s = _round_corners(y, win)
+
+    def max_curvature(a):
+        return float(np.max(np.abs(np.diff(a, 2))))
+
+    assert max_curvature(s) < 0.6 * max_curvature(y)   # corners rounded
+    assert s.min() >= y.min() - 1e-9                   # no overshoot below
+    assert s.max() <= y.max() + 1e-9                   # no phantom stock above
+    # straight interior of the decline is untouched (convex-combination kernel)
+    assert np.allclose(s[20:70], y[20:70], atol=1e-9)
+    # short lanes (weekly/monthly granularity) skip rounding entirely
+    assert _corner_window(30) == 1
+    short = np.linspace(1.0, 0.0, 30)
+    assert np.array_equal(_round_corners(short, 1), short)
+
+
 def _rgb(hex_color: str) -> tuple[int, int, int]:
     return tuple(int(hex_color[i:i + 2], 16) for i in (1, 3, 5))
 

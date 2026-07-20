@@ -12,10 +12,15 @@ Design decisions required by the spec:
 - Each lane is independently normalized to its own max
   (display_y = lane_offset + value / lane_max * LANE_HEIGHT) because real items
   span orders of magnitude; axis labels show real quantities.
-- The top boundary is smoothed with PCHIP (no overshoot -> no phantom stock on
-  delivery step-ups). Geometry only: stage labels are never interpolated, each
-  polygon inherits the stage of its source interval and color changes snap to
-  the exact date the new bucket starts feeding the plant.
+- The top boundary is CURVED, not polygonal: the daily projection is piecewise
+  linear (straight declines, hard steps at delivery arrivals), so its sharp
+  corners are first rounded with a centered Hann window (_round_corners — a
+  convex combination, so it can never overshoot the data range: no phantom
+  stock above a peak) and then interpolated with PCHIP (also no-overshoot).
+  Geometry only: hover tooltips carry the TRUE daily values, stage labels are
+  never interpolated, each polygon inherits the stage of its source interval
+  and color changes snap to the exact date the new bucket starts feeding the
+  plant.
 - Consecutive same-stage intervals are merged; all polygons of one stage within
   a lane share ONE trace (None-separated), so the trace count stays < 10/item.
 - safety_qty / overstock_qty are TIME-VARYING series drawn as Scatter lines
@@ -205,7 +210,14 @@ def build_pipeline_chart(
 
         x = lane["date"].to_numpy()
         x_num = x.astype("datetime64[ns]").astype("int64") / 86_400_000_000_000.0
-        y = qty * scale
+        # Display geometry: clamp FIRST (so deep shortages cannot distort the
+        # smoothing), then round the polyline's sharp corners — daily stock
+        # projections are piecewise linear (straight declines, hard steps on
+        # delivery arrivals) and would otherwise render sharp-edged no matter
+        # how densely they are interpolated. Hover tooltips carry the true
+        # daily values; stage color changes still snap to the exact date.
+        y = np.clip(qty * scale, -NEG_H, LANE_H)
+        y = _round_corners(y, _corner_window(len(y)))
 
         dense_x_num, dense_y = _pchip_dense(x_num, y, refine)
         dense_y = np.clip(dense_y, -NEG_H, LANE_H)
@@ -265,7 +277,7 @@ def build_pipeline_chart(
         # a filtered view gets full daily hover)
         hv = slice(None, None, hover_step)
         fig.add_trace(go.Scatter(
-            x=x[hv], y=(off + np.clip(y, -NEG_H, LANE_H))[hv], mode="markers",
+            x=x[hv], y=(off + y)[hv], mode="markers",
             marker=dict(size=9, color="rgba(0,0,0,0)",
                         line=dict(width=0)),
             text=_hover_texts(item, lane.iloc[hv], palette, display_names,
@@ -395,6 +407,33 @@ def _refine_factor(n_items: int, n_days: int) -> int:
     budget = 400_000
     r = int(budget / max(n_items * max(n_days, 1) * 3, 1))
     return max(1, min(6, r))
+
+def _corner_window(n_points: int) -> int:
+    """Corner-rounding window: ~2.5% of the lane's points, odd, capped at 15.
+
+    Under ~120 points the daily structure is already visible at screen scale
+    and rounding would distort it — return 1 (no rounding)."""
+    w = n_points // 40
+    if w < 3:
+        return 1
+    return min(15, w | 1)  # | 1 forces odd so the window stays centered
+
+def _round_corners(y: np.ndarray, window: int) -> np.ndarray:
+    """Round the sharp corners of a piecewise-linear series for DISPLAY.
+
+    A centered Hann-weighted moving average: a convex combination of nearby
+    values, so it can never overshoot the data range (no phantom stock above
+    a peak), and on straight segments it returns the segment unchanged — only
+    the corners (slope changes, delivery step-ups, the knee into gap) get
+    visibly rounded. Display-only: hover text carries the true values.
+    """
+    if window < 3 or len(y) < 2 * window:
+        return y
+    kernel = np.hanning(window + 2)[1:-1]
+    kernel = kernel / kernel.sum()
+    pad = window // 2
+    padded = np.pad(y, pad, mode="edge")
+    return np.convolve(padded, kernel, mode="valid")
 
 def _pchip_dense(x_num: np.ndarray, y: np.ndarray, refine: int
                  ) -> tuple[np.ndarray, np.ndarray]:

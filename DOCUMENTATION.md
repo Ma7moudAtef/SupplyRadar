@@ -162,8 +162,12 @@ The signature multi-lane stage-encoded inventory area chart.
   (nearest supply lightest, furthest darkest — `_spread_ramp`) so supply
   stages are never confusable with the warehouse green
   (`palette_from_delivery` — computed once so filtering never repaints).
-- Per-lane normalization (`display_y = offset + value/lane_max`), PCHIP
-  smoothing (no overshoot → no phantom stock on delivery step-ups),
+- Per-lane normalization (`display_y = offset + value/lane_max`); the drawn
+  curve is CURVED, not polygonal: sharp corners of the piecewise-linear daily
+  projection are rounded with a centered Hann window (`_round_corners` — a
+  convex combination, so no overshoot / no phantom stock) and then
+  PCHIP-interpolated (also no-overshoot); hover carries the TRUE daily
+  values and stage color changes still snap to the exact date. Also:
   spline-smoothed threshold lines, merged same-stage polygons
   (< 10 traces/item), shortage drawn below zero in gap red, hover only on
   the lane under the cursor.

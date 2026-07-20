@@ -220,9 +220,11 @@ production):
   value / lane_max`), because 138 items in tons, pieces and kg span orders of
   magnitude; tick labels show real quantities (0 black, safety green,
   overstock red, mirrored on both edges).
-- The top boundary is PCHIP-smoothed (no overshoot → no phantom stock on
-  delivery step-ups); stage labels are never interpolated and color changes
-  snap to the exact transition date.
+- The top boundary is curved, not polygonal: the sharp corners of the
+  piecewise-linear daily projection are rounded with a centered Hann window
+  and then PCHIP-interpolated — both steps are no-overshoot, so no phantom
+  stock above a peak. Hover carries the true daily values; stage labels are
+  never interpolated and color changes snap to the exact transition date.
 - Safety/overstock are drawn as time-varying Scatter series, not constant
   shapes — they move with the production plan.
 - Negative quantity (shortage) renders below the zero line in the gap color,
